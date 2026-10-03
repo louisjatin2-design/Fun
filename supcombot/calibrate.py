@@ -50,13 +50,75 @@ def _attach(settings: dict, faction: str) -> Game:
     return game
 
 
-def run_wizard(settings: dict, faction: str, only: Optional[List[str]] = None, map_rect_only: bool = False) -> None:
+RECAPTURE_GROUPS = [
+    ("ui.build.", "Waehle den ACU (oder einen T1-Ingenieur), so dass das Baumenue T1 sichtbar ist, dann F8.", 1),
+    ("ui.factory.land.", "Waehle eine LANDFABRIK (Fabrikmenue sichtbar), dann F8. F7 = ueberspringen.", 1),
+    ("ui.factory.air.", "Waehle eine LUFTFABRIK, dann F8. F7 = ueberspringen.", 1),
+    ("ui.upgrade", "Waehle einen T1-MASSENEXTRAKTOR, dann F8. F7 = ueberspringen.", 1),
+    ("ui.idle_", "Ein Ingenieur und eine Fabrik sollen untaetig sein (Idle-Symbole rechts sichtbar), dann F8.", 1),
+]
+
+
+def _tier_of(key: str) -> int:
+    return 3 if key.endswith("3") else 2 if key.endswith("2") else 1
+
+
+def copy_profile(game: Game, source_faction: str) -> List[str]:
+    """Copy another faction's profile and re-capture the faction-specific button images group by group."""
+    prof = game.profile
+    src = Profile.load(source_faction, prof.resolution)
+    if not src.points:
+        print(f"Kein Profil fuer {source_faction} {prof.resolution[0]}x{prof.resolution[1]} gefunden.")
+        return []
+    keys = prof.copy_from(src)
+    prof.save()
+    print(f"\nProfil von {source_faction} uebernommen ({len(prof.points)} Punkte). Jetzt werden die fraktionsabhaengigen"
+          " Button-Bilder neu aufgenommen; die Positionen bleiben.")
+    done: List[str] = []
+    for prefix, instruction, tier in RECAPTURE_GROUPS:
+        group = [k for k in keys if k.startswith(prefix) and _tier_of(k) == tier and not k.startswith("ui.build.tab")]
+        group += [k for k in keys if prefix == "ui.build." and k.startswith("ui.build.tab")]
+        group += [k for k in keys if prefix == "ui.factory.land." and k in ("ui.factory.upgrade", "ui.factory.repeat")]
+        if not group:
+            continue
+        print(f"\n[{len(group)} Punkte] {instruction}")
+        k = _wait_key()
+        if k == ABORT:
+            break
+        if k == SKIP:
+            continue
+        img = game.screenshot()
+        n = prof.recapture(img, group)
+        done += group
+        prof.save()
+        print(f"  {n} Referenzbilder neu aufgenommen: {', '.join(sorted(group))}")
+    remaining = [k for k in keys if k not in done and _tier_of(k) > 1]
+    if remaining:
+        print("\nT2/T3-Buttons werden spaeter mit --only neu aufgenommen, sobald eine T2/T3-Einheit ausgewaehlt ist:")
+        print("  " + " ".join(sorted(remaining)))
+    return done
+
+
+def run_wizard(settings: dict, faction: str, only: Optional[List[str]] = None, map_rect_only: bool = False,
+               copy_from: Optional[str] = None) -> None:
     win.set_dpi_aware()
     game = _attach(settings, faction)
     prof = game.profile
     print("\n=== SupComBot Kalibrierung ===")
     print("F8 = Position uebernehmen, F7 = Schritt ueberspringen (nur optionale), F6 = abbrechen.")
     print("Das Spiel muss im Fenster-/Borderless-Modus laufen und im Vordergrund sein, wenn du F8 drueckst.\n")
+
+    if copy_from:
+        copy_profile(game, copy_from)
+        missing = prof.missing_required()
+        prof.calibrated = not missing
+        prof.save()
+        print("\nProfil gespeichert:", Profile.path_for(prof.faction, prof.resolution))
+        if missing:
+            print("Es fehlen noch Pflicht-Punkte:", ", ".join(missing), "-> python -m supcombot calibrate --only ...")
+        else:
+            print("Fertig. Kontrolle: python -m supcombot doctor")
+        return
 
     if not map_rect_only:
         for key, instruction, want_patch, required in CALIBRATION_STEPS:

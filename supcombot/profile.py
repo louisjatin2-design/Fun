@@ -32,11 +32,16 @@ CALIBRATION_STEPS: List[Tuple[str, str, bool, bool]] = [
     ("ui.build.pd", "Baumenue T1: zeige auf PUNKTVERTEIDIGUNG (T1). (Optional)", True, False),
     ("ui.build.aa", "Baumenue T1: zeige auf FLAK/LUFTABWEHR (T1). (Optional)", True, False),
     ("ui.build.radar", "Baumenue T1: zeige auf RADAR (T1). (Optional)", True, False),
+    ("ui.build.tab_t1", "Baumenue: zeige auf den Reiter T1. (Optional, hilft beim Zurueckschalten)", True, False),
     ("ui.build.tab_t2", "Baumenue: zeige auf den Reiter T2 (nur verfuegbar mit T2-Ingenieur). (Optional)", True, False),
     ("ui.build.pgen2", "Baumenue T2 (T2-Ingenieur): zeige auf ENERGIEGENERATOR T2. (Optional)", True, False),
     ("ui.build.pd2", "Baumenue T2: zeige auf PUNKTVERTEIDIGUNG T2. (Optional)", True, False),
     ("ui.build.aa2", "Baumenue T2: zeige auf FLAK T2. (Optional)", True, False),
     ("ui.build.shield2", "Baumenue T2: zeige auf SCHILD T2. (Optional)", True, False),
+    ("ui.build.tab_t3", "Baumenue: zeige auf den Reiter T3 (nur mit T3-Ingenieur). (Optional)", True, False),
+    ("ui.build.pgen3", "Baumenue T3 (T3-Ingenieur): zeige auf ENERGIEGENERATOR T3. (Optional)", True, False),
+    ("ui.build.pd3", "Baumenue T3: zeige auf schwere PUNKTVERTEIDIGUNG T3 (falls vorhanden). (Optional)", True, False),
+    ("ui.build.aa3", "Baumenue T3: zeige auf FLAK/SAM T3. (Optional)", True, False),
     ("ui.factory.land.eng", "Landfabrik ausgewaehlt: zeige auf INGENIEUR.", True, True),
     ("ui.factory.land.tank", "Landfabrik: zeige auf PANZER (T1 Haupt-Kampfeinheit).", True, True),
     ("ui.factory.land.arty", "Landfabrik: zeige auf ARTILLERIE (T1). (Optional)", True, False),
@@ -52,6 +57,14 @@ CALIBRATION_STEPS: List[Tuple[str, str, bool, bool]] = [
     ("ui.factory.land.eng2", "T2-Landfabrik, Reiter T2: zeige auf T2-INGENIEUR. (Optional)", True, False),
     ("ui.factory.land.tank2", "T2-Landfabrik, Reiter T2: zeige auf T2-PANZER. (Optional)", True, False),
     ("ui.factory.land.maa2", "T2-Landfabrik, Reiter T2: zeige auf MOBILE FLAK T2. (Optional)", True, False),
+    ("ui.factory.upgrade3", "T2-Landfabrik ausgewaehlt: zeige auf den UPGRADE-Button auf T3. (Optional)", True, False),
+    ("ui.factory.tab_t3", "T3-Fabrik ausgewaehlt: zeige auf den Reiter T3 im Fabrikmenue. (Optional)", True, False),
+    ("ui.factory.land.eng3", "T3-Landfabrik, Reiter T3: zeige auf T3-INGENIEUR. (Optional)", True, False),
+    ("ui.factory.land.tank3", "T3-Landfabrik, Reiter T3: zeige auf T3-PANZER/SCHWERE EINHEIT. (Optional)", True, False),
+    ("ui.factory.land.arty3", "T3-Landfabrik, Reiter T3: zeige auf MOBILE ARTILLERIE T3. (Optional)", True, False),
+    ("ui.factory.air.inter3", "T3-Luftfabrik, Reiter T3: zeige auf LUFTUEBERLEGENHEITSJAEGER T3. (Optional)", True, False),
+    ("ui.factory.air.bomber3", "T3-Luftfabrik, Reiter T3: zeige auf STRATEGISCHEN BOMBER T3. (Optional)", True, False),
+    ("ui.upgrade3", "T2-Massenextraktor ausgewaehlt: zeige auf den UPGRADE-Button auf T3. (Optional)", True, False),
     ("ui.eco.mass_left", "Zeige auf das LINKE Ende der MASSE-Speicherleiste (oben).", False, True),
     ("ui.eco.mass_right", "Zeige auf das RECHTE Ende der MASSE-Speicherleiste.", False, True),
     ("ui.eco.energy_left", "Zeige auf das LINKE Ende der ENERGIE-Speicherleiste.", False, True),
@@ -116,6 +129,41 @@ class Profile:
                 prof.points = data.get("points", {})
                 prof.calibrated = False
         return prof
+
+    @classmethod
+    def available(cls, resolution: Tuple[int, int]) -> List[Tuple[str, "Profile"]]:
+        """All faction profiles for this resolution that have the required points."""
+        out = []
+        for faction in ("uef", "aeon", "cybran", "seraphim"):
+            if cls.path_for(faction, resolution).exists():
+                prof = cls.load(faction, resolution)
+                if not prof.missing_required():
+                    out.append((faction, prof))
+        return out
+
+    def copy_from(self, other: "Profile") -> List[str]:
+        """Take over everything from another faction's profile; returns the keys whose patches must be re-captured."""
+        self.points = {k: dict(v) for k, v in other.points.items()}
+        self.map_rects = dict(other.map_rects)
+        self.team_color = other.team_color
+        self.enemy_colors = list(other.enemy_colors)
+        self.templates = dict(other.templates)
+        self.template_pos = dict(other.template_pos)
+        self._patch_cache = {}
+        return [k for k, v in self.points.items() if "patch" in v and (k.startswith("ui.build.") or k.startswith("ui.factory.")
+                                                                    or k.startswith("ui.upgrade") or k.startswith("ui.idle_"))]
+
+    def recapture(self, img: np.ndarray, keys: List[str]) -> int:
+        """Re-capture the reference patches of the given keys from one screenshot (positions stay)."""
+        from . import vision
+
+        n = 0
+        for k in keys:
+            if self.has(k):
+                x, y = self.point(k)
+                self.set_point(k, x, y, vision.extract_patch(img, x, y, 24))
+                n += 1
+        return n
 
     def save(self) -> None:
         config.ensure_dirs()

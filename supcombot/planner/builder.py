@@ -11,7 +11,8 @@ from ..state import BotState
 # Approximate footprint (skirt) sizes in world units, used to keep structures apart.
 FOOTPRINT: Dict[str, float] = {
     "landFac": 10.0, "airFac": 10.0, "pgen": 4.0, "pgen2": 7.0, "mex": 3.0, "hydro": 6.0, "massStorage": 3.0,
-    "pd": 3.0, "pd2": 4.0, "aa": 3.0, "aa2": 4.0, "radar": 3.0, "shield2": 5.0, "wall": 1.0,
+    "pd": 3.0, "pd2": 4.0, "pd3": 6.0, "aa": 3.0, "aa2": 4.0, "aa3": 5.0, "radar": 3.0, "shield2": 5.0, "wall": 1.0,
+    "pgen3": 10.0,
 }
 
 
@@ -171,7 +172,7 @@ def enemy_distance(ctx: MapContext, p: Tuple[float, float]) -> float:
     return min((dist(p, e) for e in ctx.enemies), default=1e9)
 
 
-def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: bool) -> List[Wish]:
+def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: bool, has_t3_items: bool = False) -> List[Wish]:
     t = state.game_time()
     strat = state.strategy
     wishes: List[Wish] = []
@@ -179,17 +180,23 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
     def add(role: str, prio: float, **kw) -> None:
         wishes.append(Wish(role=role, prio=prio, **kw))
 
-    n_pgen = state.count("pgen") + state.count("pgen2") * 3
+    n_pgen = state.count("pgen") + state.count("pgen2") * 3 + state.count("pgen3") * 12
     n_mex = state.count("mex")
     n_land = state.count("landFac")
     n_air = state.count("airFac")
 
     # Energy: ratio of generators to consumers, plus the bar reading.
     want_pgen = 2 + n_mex // 2 + n_land * 2 + n_air * 3 + state.count("radar") * 2
+    if has_t3_items and t > 1200 and state.mass_ratio > 0.45:
+        pgen_role = "pgen3"
+    elif has_t2_items and t > 600:
+        pgen_role = "pgen2"
+    else:
+        pgen_role = "pgen"
     if state.energy_stall:
-        add("pgen2" if has_t2_items and t > 600 else "pgen", 100, count=2)
+        add(pgen_role, 100, count=1 if pgen_role == "pgen3" else 2)
     elif state.energy_low or n_pgen < want_pgen:
-        add("pgen2" if has_t2_items and t > 600 and state.mass_ratio > 0.4 else "pgen", 82, count=2)
+        add(pgen_role if state.mass_ratio > 0.4 or pgen_role == "pgen" else "pgen", 82, count=1 if pgen_role == "pgen3" else 2)
 
     if n_land == 0:
         add("landFac", 98)
@@ -241,10 +248,10 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
 
     want_pd = 4 if strat == "turtle" else (1 if t > 420 else 0)
     want_aa = 3 if strat == "turtle" else (2 if t > 480 else 0)
-    if state.count("pd") + state.count("pd2") < want_pd:
-        add("pd2" if has_t2_items else "pd", 60, toward_enemy=True)
-    if state.count("aa") + state.count("aa2") < want_aa:
-        add("aa2" if has_t2_items else "aa", 58, toward_enemy=(strat != "turtle"))
+    if state.count("pd") + state.count("pd2") + state.count("pd3") < want_pd:
+        add("pd3" if has_t3_items else "pd2" if has_t2_items else "pd", 60, toward_enemy=True)
+    if state.count("aa") + state.count("aa2") + state.count("aa3") < want_aa:
+        add("aa3" if has_t3_items else "aa2" if has_t2_items else "aa", 58, toward_enemy=(strat != "turtle"))
     if has_t2_items and t > 900 and state.count("shield2") < 1 and state.mass_ratio > 0.5:
         add("shield2", 40)
     if t > 600 and state.mass_ratio > 0.5 and state.count("massStorage") < 4:

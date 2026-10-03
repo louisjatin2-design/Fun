@@ -25,6 +25,9 @@ Profil = Fraktion + Client-Auflösung, gespeichert unter `%APPDATA%\SupComBot\pr
 | ui.factory.upgrade | Upgrade-Button (T2-HQ) bei ausgewählter Landfabrik | optional |
 | ui.factory.repeat | Wiederholen-/Endlos-Button im Fabrikmenü | optional |
 | ui.factory.tab_t2, land.eng2, land.tank2, land.maa2 | T2-Reiter und T2-Einheiten (nach dem Upgrade) | optional |
+| ui.factory.upgrade3, tab_t3, land.eng3, land.tank3, land.arty3, air.inter3, air.bomber3 | T3-Upgrade und T3-Einheiten | optional |
+| ui.build.tab_t1 / tab_t3, pgen3, pd3, aa3 | Reiter und T3-Gebäude (T3-Ingenieur ausgewählt) | optional |
+| ui.upgrade3 | Upgrade-Button bei ausgewähltem T2-Mex | optional |
 | colors.enemy | Symbol einer Gegner-Einheit (pro Gegnerfarbe wiederholen) | optional |
 | ui.eco.mass_left / mass_right / energy_left / energy_right | Enden der Speicherleisten oben | ja |
 | colors.team | dein ACU-Symbol bei voller Herauszoom-Stufe (Teamfarbe) | ja |
@@ -49,3 +52,10 @@ oder das Idle-Symbol wirklich sichtbar ist (Patch-Ähnlichkeit ≥ 0,78).
 | Keine Ingenieur-Aufträge | Idle-Symbol-Referenz passt nicht mehr (`--only ui.idle_engineer`) |
 | Mex wird nicht gebaut | Kartenrechteck ungenau → `--map-rect`; bei großen Karten `precision_zoom_notches` setzen |
 | Hotkeys reagieren nicht | `keyboard`-Modul braucht evtl. Admin-Rechte; Konsole „Als Administrator ausführen“ |
+
+## Weitere Fraktionen
+
+`python -m supcombot calibrate --faction aeon --copy-from uef` übernimmt das UEF-Profil komplett (Positionen,
+Leisten, Farben, Kartenrechtecke, Vorlagen) und nimmt nur die Referenzbilder der Buttons neu auf, die das
+Fraktions-Symbol zeigen. Dafür genügen fünf Tastendrücke, jeweils mit sichtbarem Menü: ACU, Landfabrik, Luftfabrik,
+T1-Mex, Idle-Symbole. T2/T3-Bilder werden später mit `--only` ergänzt.

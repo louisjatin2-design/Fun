@@ -22,7 +22,10 @@ mit **Maus- und Tastatureingaben** (SendInput). Ein Overlay-Fenster über dem Sp
 - **Geschlossene Angriffsschleife**: Wellen werden über eigene und gegnerische Symbole auf der ganzen Karte verfolgt,
   ziehen sich bei Übermacht zum Sammelpunkt zurück und ziehen nach erledigtem Ziel weiter
 - **Rücksicht auf dich**: bewegst du die Maus, pausiert der Bot ein paar Sekunden von selbst
-- **Fabrik-Upgrade auf T2, T2-Produktion und Endlos-Wiederholung** (optionale Kalibrierpunkte)
+- **Tech 2 und Tech 3**: Fabrik-Upgrades T1→T2→T3, T2/T3-Einheiten und -Ingenieure, Mex-Upgrades bis T3,
+  T3-Generatoren und -Verteidigung, Endlos-Wiederholung (optionale Kalibrierpunkte)
+- **Alle Fraktionen**: Profil pro Fraktion, neue Fraktionen übernehmen alles Fraktionsunabhängige per `--copy-from`,
+  und mit `faction: "auto"` erkennt der Bot die Fraktion zu Spielbeginn am Baumenü
 - **ACU-Rettung** bei vielen Gegnern in der Basis (braucht die Spiel-Taste „Kommandant auswählen“)
 - **Aufklärung**: erster Luft-Bau ist ein Späher, Luftfabriken sammeln vorne; Heimwache bei turtle/passiv
 - **Strategie „auto“**: wählt pro Karte und Startslot die Strategie mit der besten Siegquote
@@ -87,7 +90,19 @@ Im laufenden Skirmish (Spiel im Vordergrund):
 Der Assistent sagt dir Schritt für Schritt, worauf du mit der Maus zeigen sollst (Baumenü-Buttons,
 Fabrik-Buttons, Idle-Ingenieur-Symbol, Masse-/Energie-Leiste, deine Teamfarbe, Kartenrechteck bei voller
 Herauszoom-Stufe). **F8** übernimmt, **F7** überspringt optionale Schritte, **F6** bricht ab.
-Pro Fraktion einmal wiederholen (`--faction cybran` usw.). Einzelne Punkte nachbessern:
+
+**Weitere Fraktionen** gehen deutlich schneller: Das erste Profil wird übernommen, nur die fraktionsabhängigen
+Button-Bilder werden in fünf Schritten neu aufgenommen (ACU auswählen, F8; Landfabrik, F8; Luftfabrik, F8; Mex, F8;
+Idle-Symbole, F8). Positionen bleiben, denn das Baumenü ist bei allen Fraktionen gleich aufgebaut.
+
+```bat
+.\calibrate.bat --faction aeon --copy-from uef
+.\calibrate.bat --faction cybran --copy-from uef
+.\calibrate.bat --faction seraphim --copy-from uef
+```
+
+Mit `faction: "auto"` (Standard) erkennt der Bot beim ersten ACU-Klick, welches Profil zum Baumenü passt.
+Einzelne Punkte nachbessern:
 
 ```bat
 .\calibrate.bat --only ui.build.mex ui.idle_engineer
@@ -151,6 +166,24 @@ Wichtige Einstellungen in `settings.json`:
 
 Berichte: `.\.venv\Scripts\python.exe -m supcombot reports --last` zeigt die letzte Nachbesprechung, im Overlay
 der Button „Nachbesprechung“.
+
+### T2 und T3 freischalten
+
+Die Tech-Stufen brauchen zusätzliche, optionale Punkte. Sie lassen sich erst aufnehmen, wenn die passende Einheit
+im Spiel existiert, deshalb am besten in einem ruhigen Spiel gegen eine leichte KI:
+
+```bat
+.\calibrate.bat --only ui.factory.upgrade ui.factory.repeat
+.\calibrate.bat --only ui.factory.tab_t2 ui.factory.land.eng2 ui.factory.land.tank2 ui.factory.land.maa2
+.\calibrate.bat --only ui.build.tab_t1 ui.build.tab_t2 ui.build.pgen2 ui.build.pd2 ui.build.aa2 ui.build.shield2
+.\calibrate.bat --only ui.factory.upgrade3 ui.factory.tab_t3 ui.factory.land.eng3 ui.factory.land.tank3 ui.factory.land.arty3
+.\calibrate.bat --only ui.build.tab_t3 ui.build.pgen3 ui.build.pd3 ui.build.aa3 ui.upgrade ui.upgrade3
+```
+
+Der Bot nutzt jede Stufe nur, wenn ihre Punkte vorhanden sind: Fabrik-Upgrade T2 ab etwa 8 Minuten bei guter
+Wirtschaft, T3 ab etwa 18 Minuten mit 9+ Mex; alle weiteren Fabriken gehen auf T2, sobald Masse überläuft; Mex werden
+nacheinander auf T2 und ab 8 T2-Mex auf T3 gebracht. T3-Gebäude baut nur ein T3-Ingenieur, der Bot wartet also,
+bis er einen bestellt hat.
 
 ## 5. Ollama
 
@@ -250,7 +283,7 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 - Die Bauplatz-Prüfung liest die Farbe der Bauvorschau. Ist die Vorschau bei voller Herauszoom-Stufe zu klein, gilt
   der Platz als „unbekannt“ und wird trotzdem geklickt; Siege merken sich nur Layouts, die funktioniert haben.
 - Einkommenswerte werden nicht gelesen (nur Speicher-Füllstände). Daher zeitbasierte Budgets.
-- Fabrik-Upgrade auf T2 und T2-Produktion laufen nur mit den optionalen Kalibrierpunkten; T3 fehlt noch.
+- T2/T3 laufen nur mit den optionalen Kalibrierpunkten. Experimentals (T4) fehlen noch.
 - Die Wellenverfolgung braucht Sicht: ohne Radar oder Späher sind Gegner-Symbole im Nebel unsichtbar.
 - Der Attack-Move ist als Alt+Rechtsklick konfiguriert; falls dein Spiel anders belegt ist, in `settings.json`
   unter `input.attack_move_modifier` ändern (`"alt"`, `"ctrl"`, `"shift"` oder leer für normalen Rechtsklick).
@@ -261,7 +294,7 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 
 1. **OCR der Einkommenszahlen** (pytesseract) für echte Masse-/Energie-Bilanz statt Füllstandsheuristik.
 2. **Automatische Start-Slot-Erkennung**: ACU-Icon in Teamfarbe am Spielstart suchen und dem nächsten ARMY-Marker zuordnen.
-3. **T3-Produktion und Experimentals** mit weiteren Kalibrierpunkten.
+3. **Experimentals (T4)** und T3-Artillerie-Stellungen mit weiteren Kalibrierpunkten.
 4. **Build-Order-Profile pro Karte** als editierbare JSON, inkl. Export/Import der Layouts.
 5. **Sprachausgabe** der Ollama-Ratschläge und der Nachbesprechung.
 6. **Tray-Icon** statt Konsole, Autostart mit dem Spiel.

@@ -27,7 +27,7 @@ DEFAULT_SETTINGS: dict = {
     # Game / environment
     "game_dir": "",                     # empty = auto detect Steam install
     "window_title": "Forged Alliance",  # substring of the game window title
-    "faction": "uef",
+    "faction": "auto",                  # auto = detect from the build menu at game start (needs calibrated profiles)
     "map": "auto",                      # "auto" = detect via map preview, otherwise map folder name
     "start_slot": 1,                    # ARMY_<n> marker you spawn on (lobby slot)
     "enemy_slots": [],                  # lobby slots of enemies; empty = every other slot that is not an ally
