@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from ..state import BotState, Wave
 from .builder import MapContext, dist
@@ -69,9 +69,52 @@ def should_launch(state: BotState, settings: dict) -> bool:
     return estimate_army(state) >= threshold(state, settings)
 
 
-def record_wave(state: BotState, size: int, target: Tuple[float, float], reason: str) -> Wave:
-    w = Wave(started=time.time(), size=size, target=target, reason=reason)
+def record_wave(state: BotState, size: int, target: Tuple[float, float], reason: str, start_pos: Optional[Tuple[float, float]] = None) -> Wave:
+    w = Wave(started=time.time(), size=size, target=target, reason=reason, last_pos=start_pos, last_update=time.time())
     state.waves.append(w)
     state.army_seen = None
     state.event(f"Angriffswelle {len(state.waves)}: ~{size} Einheiten -> ({int(target[0])},{int(target[1])}) [{reason}]")
     return w
+
+
+def manage_waves(state: BotState, ctx: MapContext, friendly, enemy, now: float, base_radius: float = 60.0) -> List[Tuple[str, Wave, Optional[Tuple[float, float]]]]:
+    """Track active waves with the live clusters and decide: ('retreat', wave, None) or ('advance', wave, target).
+
+    friendly/enemy: [(x, z, count)] clusters on the whole map. A wave is located by the nearest friendly
+    cluster to its last known position. Retreat when the enemy near the wave clearly outnumbers it.
+    """
+    actions: List[Tuple[str, Wave, Optional[Tuple[float, float]]]] = []
+    ratio = {1: 1.1, 2: 1.6, 3: 2.6}.get(state.aggression, 1.6)
+    for w in state.waves:
+        if w.done or now - w.started < 8:
+            continue
+        pos = w.last_pos or ctx.rally
+        candidates = [(dist((x, z), pos), x, z, n) for x, z, n in friendly if dist((x, z), pos) < 70 and dist((x, z), ctx.start) > base_radius * 0.8]
+        if candidates:
+            _d, x, z, n = min(candidates)
+            w.last_pos, w.seen, w.last_update, w.lost_since = (x, z), n, now, 0.0
+        else:
+            if not w.lost_since:
+                w.lost_since = now
+            if now - w.lost_since > 30:
+                w.done = True
+                state.event(f"Welle ({w.size}) nicht mehr sichtbar: beendet")
+                continue
+            continue
+        near_enemy = sum(n for x, z, n in enemy if dist((x, z), w.last_pos) < 45)
+        if w.retreating:
+            if dist(w.last_pos, ctx.rally) < 25:
+                w.done = True
+                state.event("Welle zurueck am Sammelpunkt")
+            continue
+        if near_enemy > max(3, w.seen * ratio) and state.aggression < 3:
+            w.retreating = True
+            actions.append(("retreat", w, None))
+            state.event(f"Rueckzug: {near_enemy} Gegner vs {w.seen} eigene")
+        elif dist(w.last_pos, w.target) < 20 and near_enemy == 0 and now - w.last_update < 5:
+            nxt = pick_target(state, ctx, w.last_pos, enemy, base_radius)
+            if nxt and dist(nxt, w.target) > 15:
+                w.target = nxt
+                actions.append(("advance", w, nxt))
+                state.event(f"Welle zieht weiter -> ({int(nxt[0])},{int(nxt[1])})")
+    return actions

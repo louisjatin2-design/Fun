@@ -22,6 +22,10 @@ Profil = Fraktion + Client-Auflösung, gespeichert unter `%APPDATA%\SupComBot\pr
 | ui.factory.land.arty / maa / scout | weitere Land-Einheiten | optional |
 | ui.factory.air.scout / inter / bomber | Luftfabrik | optional |
 | ui.upgrade | Upgrade-Button bei ausgewähltem Mex | optional |
+| ui.factory.upgrade | Upgrade-Button (T2-HQ) bei ausgewählter Landfabrik | optional |
+| ui.factory.repeat | Wiederholen-/Endlos-Button im Fabrikmenü | optional |
+| ui.factory.tab_t2, land.eng2, land.tank2, land.maa2 | T2-Reiter und T2-Einheiten (nach dem Upgrade) | optional |
+| colors.enemy | Symbol einer Gegner-Einheit (pro Gegnerfarbe wiederholen) | optional |
 | ui.eco.mass_left / mass_right / energy_left / energy_right | Enden der Speicherleisten oben | ja |
 | colors.team | dein ACU-Symbol bei voller Herauszoom-Stufe (Teamfarbe) | ja |
 | Karte | ganz herausgezoomt: Kartenrechteck wird erkannt, sonst zwei Ecken zeigen | ja |

@@ -21,7 +21,7 @@ DEBUG_DIR = APP_DIR / "debug"
 SETTINGS_FILE = APP_DIR / "settings.json"
 
 FACTIONS = ["uef", "aeon", "cybran", "seraphim"]
-STRATEGIES = ["balanced", "eco", "rush", "turtle"]
+STRATEGIES = ["auto", "balanced", "eco", "rush", "turtle"]
 
 DEFAULT_SETTINGS: dict = {
     # Game / environment
@@ -78,10 +78,22 @@ DEFAULT_SETTINGS: dict = {
         "click_delay": 0.08,
         "action_delay": 0.25,
         "zoom_out_notches": 40,
+        "placement_check": True,        # read the build preview (green/red) before placing a structure
+        "yield_to_user_seconds": 4,     # pause the bot while you move the mouse yourself (0 = off)
+        "select_acu_key": "",           # in-game hotkey that selects the ACU (e.g. "home"); enables ACU rescue
+        "acu_retreat_threshold": 6,     # enemy icons in the base that make the ACU retreat
         "precision_zoom_notches": 0,    # >0: zoom in at the cursor before precise clicks (large maps)
         "settle_after_zoom": 0.6,
     },
-    "overlay": {"x": 20, "y": 120, "alpha": 0.88},
+    "overlay": {"x": 20, "y": 120, "alpha": 0.88, "minimap": True, "minimap_size": 220, "log_lines": 5},
+    # ACU opening per strategy (roles: landFac, airFac, mex, pgen, pd, aa, radar, hydro)
+    "openings": {
+        "balanced": ["landFac", "mex", "mex", "pgen", "pgen", "mex", "mex"],
+        "rush": ["landFac", "mex", "mex", "pgen", "landFac", "mex"],
+        "eco": ["mex", "mex", "landFac", "pgen", "pgen", "mex", "mex", "pgen"],
+        "turtle": ["landFac", "mex", "mex", "pgen", "pgen", "pd", "mex"],
+    },
+    "debrief": True,                    # after a game: write a report and ask Ollama for a short review
     # Live vision: continuous capture of the game window instead of on-demand screenshots
     "vision": {
         "fps": 60,                      # capture rate of the frame stream

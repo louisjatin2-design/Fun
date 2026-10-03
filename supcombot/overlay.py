@@ -65,6 +65,18 @@ class Overlay:
             tk.Label(body, textvariable=v, bg=bg, fg=fg if key == "status" else dim, anchor="w",
                      font=("Segoe UI", 9), justify="left", wraplength=330).pack(fill="x")
 
+        # Event log (last few events) and the minimap, side by side.
+        mid = tk.Frame(self.root, bg=bg, padx=8)
+        mid.pack(fill="x")
+        ov = self.settings.get("overlay", {})
+        self.log_text = tk.Text(mid, height=int(ov.get("log_lines", 5)), width=38, bg="#0f1830", fg=dim, bd=0,
+                                font=("Consolas", 8), state="disabled", wrap="word")
+        self.log_text.pack(side="left", fill="both", expand=True, pady=2)
+        size = int(ov.get("minimap_size", 220))
+        self.minimap = tk.Canvas(mid, width=size, height=size, bg="#06090f", highlightthickness=1, highlightbackground="#24324f")
+        if ov.get("minimap", True):
+            self.minimap.pack(side="right", padx=(6, 0), pady=2)
+
         grid = tk.Frame(self.root, bg=bg, padx=8, pady=4)
         grid.pack(fill="x")
         toggles = [("bot_enabled", "Bot"), ("auto_attack", "Auto-Angriff"), ("build_manager", "Bauen"),
@@ -92,7 +104,8 @@ class Overlay:
         actions = [("JETZT ANGREIFEN", lambda: self.bot.request("attack_now")), ("Neues Spiel", lambda: self.bot.request("new_game")),
                    ("Sieg melden", lambda: self.bot.request("report_win")), ("Niederlage melden", lambda: self.bot.request("report_loss")),
                    ("Layouts loeschen", self.clear_layouts), ("Start-Slot +", self.next_start),
-                   ("Bot-Sicht (Live)", self.toggle_preview), ("Verteidigung", lambda: self.toggle("auto_defense"))]
+                   ("Bot-Sicht (Live)", self.toggle_preview), ("Verteidigung", lambda: self.toggle("auto_defense")),
+                   ("Minikarte", self.toggle_minimap), ("Nachbesprechung", self.show_debrief)]
         for i, (label, cmd) in enumerate(actions):
             b = tk.Button(grid, text=label, width=16, bd=0, command=cmd, bg="#24324f", fg="#e6edf7", font=("Segoe UI", 9))
             b.grid(row=row + i // 2, column=i % 2, padx=3, pady=2, sticky="ew")
@@ -119,7 +132,10 @@ class Overlay:
                 on = self.settings[key]
                 b.configure(bg="#2e7d32" if on else "#6b2b2b", fg="#e6edf7",
                             text=b.cget("text").split(":")[0] + (": AN" if on else ": AUS"))
-        self.buttons["strategy"].configure(text=f"Strategie: {self.settings.get('strategy')}", bg="#24324f", fg="#e6edf7")
+        strat = self.settings.get("strategy")
+        if strat == "auto":
+            strat = f"auto ({getattr(self.bot, 'auto_strategy', '?')})"
+        self.buttons["strategy"].configure(text=f"Strategie: {strat}", bg="#24324f", fg="#e6edf7")
         names = {1: "passiv", 2: "normal", 3: "aggressiv"}
         self.buttons["aggression"].configure(text=f"Aggression: {names.get(self.settings.get('aggression'), '?')}", bg="#24324f", fg="#e6edf7")
         self.buttons["threshold"].configure(text=f"Angriff ab: {self.settings.get('attack_threshold')}", bg="#24324f", fg="#e6edf7")
@@ -220,6 +236,87 @@ class Overlay:
         n = layouts.clear_all()
         self.bot.state.event(f"{n} Layout-Dateien geloescht")
 
+    def toggle_minimap(self) -> None:
+        if self.minimap.winfo_ismapped():
+            self.minimap.pack_forget()
+            self.settings.setdefault("overlay", {})["minimap"] = False
+        else:
+            self.minimap.pack(side="right", padx=(6, 0), pady=2)
+            self.settings.setdefault("overlay", {})["minimap"] = True
+        config.save_settings(self.settings)
+
+    def show_debrief(self) -> None:
+        text = self.bot.state.debrief or "Noch keine Nachbesprechung. Sie entsteht nach Spielende (Sieg/Niederlage erkannt oder gemeldet) mit Ollama."
+        win = tk.Toplevel(self.root)
+        win.title("SupComBot - Nachbesprechung")
+        win.attributes("-topmost", True)
+        win.configure(bg="#0b1220")
+        t = tk.Text(win, width=70, height=16, bg="#0f1830", fg="#e6edf7", font=("Segoe UI", 10), wrap="word", bd=0)
+        t.insert("1.0", text)
+        t.configure(state="disabled")
+        t.pack(padx=8, pady=8)
+
+    def _draw_minimap(self, st: Dict[str, object]) -> None:
+        c = self.minimap
+        if not c.winfo_ismapped():
+            return
+        c.delete("all")
+        info = self.bot.map
+        size = int(self.settings.get("overlay", {}).get("minimap_size", 220))
+        scale = size / max(info.size)
+        w, h = info.size[0] * scale, info.size[1] * scale
+        c.create_rectangle(0, 0, w, h, outline="#24324f", fill="#0d1526")
+
+        def pt(x, z):
+            return x * scale, z * scale
+
+        for m in info.mass:
+            x, y = pt(m.x, m.z)
+            c.create_oval(x - 1.5, y - 1.5, x + 1.5, y + 1.5, fill="#4c6a3c", outline="")
+        ctx = self.bot.ctx
+        colors = {"mex": "#7ee07e", "landFac": "#ffffff", "airFac": "#c8c8ff", "pgen": "#ffc850", "pd": "#ff9c9c", "aa": "#9cd3ff", "radar": "#d0a0ff"}
+        for stc in list(self.bot.state.structures):
+            x, y = pt(stc.x, stc.z)
+            c.create_rectangle(x - 2, y - 2, x + 2, y + 2, outline=colors.get(stc.role, "#b0b0b0"))
+        for e in ctx.enemies:
+            x, y = pt(*e)
+            c.create_line(x - 4, y - 4, x + 4, y + 4, fill="#ff4040", width=2)
+            c.create_line(x - 4, y + 4, x + 4, y - 4, fill="#ff4040", width=2)
+        for n in self.settings.get("ally_slots", []):
+            mk = info.starts.get(n)
+            if mk:
+                x, y = pt(mk.x, mk.z)
+                c.create_oval(x - 4, y - 4, x + 4, y + 4, outline="#4aa3ff", width=2)
+        x, y = pt(*ctx.start)
+        c.create_oval(x - 4, y - 4, x + 4, y + 4, outline="#40ff40", width=2)
+        x, y = pt(*ctx.rally)
+        c.create_oval(x - 3, y - 3, x + 3, y + 3, outline="#ffe600", width=2)
+        for cx, cz, n in (st.get("enemy_clusters") or [])[:60]:
+            x, y = pt(cx, cz)
+            r = 2 + min(8, n ** 0.5)
+            c.create_oval(x - r, y - r, x + r, y + r, outline="#ff3030")
+        for cx, cz, n in (st.get("friendly_clusters") or [])[:60]:
+            x, y = pt(cx, cz)
+            r = 2 + min(8, n ** 0.5)
+            c.create_oval(x - r, y - r, x + r, y + r, outline="#30ff60")
+        for wv in self.bot.state.waves:
+            if wv.done:
+                continue
+            x1, y1 = pt(*(wv.last_pos or ctx.rally))
+            x2, y2 = pt(*wv.target)
+            c.create_line(x1, y1, x2, y2, fill="#ff8080" if not wv.retreating else "#ffd080", dash=(3, 2))
+        c.create_text(4, h - 4, anchor="sw", text=info.name[:28], fill="#7f8fa8", font=("Segoe UI", 7))
+
+    def _update_log(self, events) -> None:
+        text = "\n".join(events or [])
+        if getattr(self, "_last_log", None) == text:
+            return
+        self._last_log = text
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.insert("1.0", text)
+        self.log_text.configure(state="disabled")
+
     def toggle_visible(self) -> None:
         if self.root.state() == "withdrawn":
             self.root.deiconify()
@@ -289,6 +386,11 @@ class Overlay:
                                 f"Gegner gesehen {st.get('enemies_total', 0)} / in Basis {st.get('enemies_near_base', 0)}   Slots: {st.get('enemies', 0)} Gegner, {st.get('allies', 0)} Ally")
         if hasattr(self, "slot_buttons"):
             self._refresh_slots()
+        try:
+            self._update_log(st.get("events"))
+            self._draw_minimap(st)
+        except Exception as exc:  # cosmetic widgets must not break the overlay
+            log.debug("Minikarte/Log: %s", exc)
         self._refresh_buttons()
         self.root.after(500, self._poll)
 

@@ -100,6 +100,8 @@ class Inputs:
         self.abort = threading.Event()
         self.log = logger
         self._held: list[str] = []
+        self.last_pos = None          # last cursor position set by the bot (user-activity detection)
+        self.last_move_time = 0.0
         if IS_WINDOWS:
             self._vx, self._vy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)
             self._vw, self._vh = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
@@ -124,6 +126,8 @@ class Inputs:
     def move(self, x: int, y: int) -> None:
         self._check()
         self._dbg(f"move {x},{y}")
+        self.last_pos = (int(x), int(y))
+        self.last_move_time = time.time()
         if self.dry_run:
             return
         ax = int((x - self._vx) * 65535 / max(1, self._vw - 1))
