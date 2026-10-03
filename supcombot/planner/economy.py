@@ -68,3 +68,11 @@ class Economy:
         if state.mass_float:
             return 4
         return 2
+
+    @staticmethod
+    def can_upgrade_factory(state: BotState) -> bool:
+        t = state.game_time()
+        min_t = {"rush": 720, "balanced": 480, "eco": 420, "turtle": 540}.get(state.strategy, 480)
+        if t < min_t or state.mass_stall or state.energy_stall:
+            return False
+        return state.mass_ratio > 0.5 and state.energy_ratio > 0.5 and state.count("mex") >= 6

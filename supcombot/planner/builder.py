@@ -86,6 +86,9 @@ def blocked(state: BotState, ctx: MapContext, role: str, pos: Tuple[float, float
         for m in ctx.info.mass:
             if dist((m.x, m.z), pos) < size / 2 + 2.5:
                 return True
+    for b in state.blocked_spots:   # spots the game refused (red preview)
+        if dist(b, pos) < size / 2 + 1.5:
+            return True
     # Keep the start marker free (the ACU stands there at first).
     if dist(ctx.start, pos) < size / 2 + 3.0:
         return True
@@ -251,25 +254,33 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
     return wishes
 
 
-def opening_orders(state: BotState, ctx: MapContext, layout: Optional[dict], layout_used: set) -> List[Wish]:
-    """ACU opening: factory, two mex, two pgen, two more mex."""
+DEFAULT_OPENINGS: Dict[str, List[str]] = {
+    "balanced": ["landFac", "mex", "mex", "pgen", "pgen", "mex", "mex"],
+    "rush": ["landFac", "mex", "mex", "pgen", "landFac", "mex"],
+    "eco": ["mex", "mex", "landFac", "pgen", "pgen", "mex", "mex", "pgen"],
+    "turtle": ["landFac", "mex", "mex", "pgen", "pgen", "pd", "mex"],
+}
+
+
+def opening_orders(state: BotState, ctx: MapContext, layout: Optional[dict], layout_used: set,
+                   sequence: Optional[List[str]] = None) -> List[Wish]:
+    """ACU opening from a role sequence (settings `openings`), e.g. factory, mex, mex, pgen, pgen, mex, mex."""
+    seq = list(sequence or DEFAULT_OPENINGS.get(state.strategy, DEFAULT_OPENINGS["balanced"]))
     orders: List[Wish] = []
-    fac = Wish("landFac", 100)
-    fac.pos = choose_spot(state, ctx, fac, layout, layout_used)
-    if fac.pos:
-        orders.append(fac)
-        state.add_structure("landFac", fac.pos[0], fac.pos[1], builder="acu")
     mexes = free_mass_markers(state, ctx, 60)
-    for m in mexes[:2]:
-        orders.append(Wish("mex", 95, pos=(m.x, m.z), marker=m.name))
-        state.add_structure("mex", m.x, m.z, builder="acu", marker=m.name)
-    for _ in range(2):
-        w = Wish("pgen", 90)
+    prio = 100.0
+    for role in seq:
+        prio -= 1
+        if role == "mex":
+            if not mexes:
+                continue
+            m = mexes.pop(0)
+            orders.append(Wish("mex", prio, pos=(m.x, m.z), marker=m.name))
+            state.add_structure("mex", m.x, m.z, builder="acu", marker=m.name)
+            continue
+        w = Wish(role, prio, toward_enemy=(role in ("pd", "aa")))
         w.pos = choose_spot(state, ctx, w, layout, layout_used)
         if w.pos:
             orders.append(w)
-            state.add_structure("pgen", w.pos[0], w.pos[1], builder="acu")
-    for m in mexes[2:4]:
-        orders.append(Wish("mex", 85, pos=(m.x, m.z), marker=m.name))
-        state.add_structure("mex", m.x, m.z, builder="acu", marker=m.name)
+            state.add_structure(role, w.pos[0], w.pos[1], builder="acu")
     return orders

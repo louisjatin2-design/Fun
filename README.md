@@ -18,7 +18,17 @@ mit **Maus- und Tastatureingaben** (SendInput). Ein Overlay-Fenster über dem Sp
   Einzel-Screenshots; eine Wahrnehmungsschicht wertet mehrmals pro Sekunde aus (Wirtschaft, Idle-Symbole, Armee am
   Sammelpunkt, Gegner nahe Basis, Spielende) und ein Vorschaufenster „Bot-Sicht“ zeigt, was der Bot sieht
 - Automatische Verteidigung: Gegner-Symbole in der Basis lösen einen Gegenangriff vom Sammelpunkt aus
-- Overlay mit allen Schaltern, Strategie (balanced/eco/rush/turtle), Aggression, Schwellen, globale Hotkeys
+- **Bauplatz-Prüfung**: vor jedem Klick wird die Bauvorschau gelesen (grün/rot); rote Plätze werden gemerkt und ersetzt
+- **Geschlossene Angriffsschleife**: Wellen werden über eigene und gegnerische Symbole auf der ganzen Karte verfolgt,
+  ziehen sich bei Übermacht zum Sammelpunkt zurück und ziehen nach erledigtem Ziel weiter
+- **Rücksicht auf dich**: bewegst du die Maus, pausiert der Bot ein paar Sekunden von selbst
+- **Fabrik-Upgrade auf T2, T2-Produktion und Endlos-Wiederholung** (optionale Kalibrierpunkte)
+- **ACU-Rettung** bei vielen Gegnern in der Basis (braucht die Spiel-Taste „Kommandant auswählen“)
+- **Aufklärung**: erster Luft-Bau ist ein Späher, Luftfabriken sammeln vorne; Heimwache bei turtle/passiv
+- **Strategie „auto“**: wählt pro Karte und Startslot die Strategie mit der besten Siegquote
+- **Spielbericht und Nachbesprechung**: nach jedem Spiel ein JSON-Bericht plus 5-Punkte-Review von Ollama
+- Overlay mit allen Schaltern, Minikarte (Mex, Gebäude, Wellen, Gegner-Cluster), Ereignislog, Strategie,
+  Aggression, Schwellen, globale Hotkeys, `doctor.bat` für die Erstdiagnose
 
 > **Wichtig:** Der Bot kann nicht getestet werden, ohne dass das Spiel läuft. Alle Spiel-Positionen
 > (Buttons, Leisten) werden einmalig mit dem Kalibrier-Assistenten auf deinem PC aufgenommen. Lies
@@ -91,6 +101,14 @@ Niederlage den Dialog, damit das Spielende automatisch erkannt wird.
 
 Details: [docs/KALIBRIERUNG.md](docs/KALIBRIERUNG.md).
 
+Erstdiagnose jederzeit:
+
+```bat
+.\doctor.bat
+```
+
+Sie prüft Module, Spielfenster, Karten, Profil (fehlende Pflicht- und optionale Punkte), Farben, Vorlagen und Ollama.
+
 ## 4. Spielen
 
 ```bat
@@ -118,6 +136,21 @@ Tastatur in kurzen Schüben (ca. alle 3 s). Solange er an ist, solltest du nicht
 | Ctrl+Alt+Q | Beenden |
 
 Alle Hotkeys stehen in `%APPDATA%\SupComBot\settings.json` und sind änderbar.
+
+Wichtige Einstellungen in `settings.json`:
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `strategy` | `auto`, `balanced`, `eco`, `rush`, `turtle`. `auto` nimmt die Strategie mit der besten Siegquote auf dieser Karte/Startposition. |
+| `openings` | ACU-Eröffnung pro Strategie als Rollenliste (`landFac`, `mex`, `pgen`, `pd`, `aa`, `radar`, `hydro`, `airFac`). |
+| `input.placement_check` | Bauvorschau vor dem Platzieren lesen (Standard an). |
+| `input.yield_to_user_seconds` | Pause, sobald du die Maus bewegst (Standard 4 s, 0 = aus). |
+| `input.select_acu_key` | Spiel-Taste, die den ACU auswählt (z. B. `home`, im F1-Menü nachsehen). Aktiviert die ACU-Rettung und eine robustere Eröffnung. |
+| `input.acu_retreat_threshold` | Ab so vielen Gegner-Symbolen in der Basis zieht sich der ACU zurück. |
+| `debrief` | Spielbericht und Ollama-Nachbesprechung nach Spielende. |
+
+Berichte: `.\.venv\Scripts\python.exe -m supcombot reports --last` zeigt die letzte Nachbesprechung, im Overlay
+der Button „Nachbesprechung“.
 
 ## 5. Ollama
 
@@ -214,10 +247,11 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 - Der Bot teilt sich Maus und Tastatur mit dir. Gleichzeitiges Spielen geht nicht; Ctrl+Alt+B stoppt sofort.
 - Gegner-Wahrnehmung nur über kalibrierte Gegnerfarben in der Basis-Umgebung. Angriffsziele sind bekannte
   Positionen (Mex-Punkte auf Gegnerseite, Startpunkt), keine Rückzugslogik. Verluste werden über Wellen geschätzt.
-- Bauplätze werden nicht auf Gültigkeit geprüft. Ungültige Plätze (Klippen, Wasser) ignoriert das Spiel stillschweigend;
-  der Bot glaubt dann, gebaut zu haben. Siege merken sich daher nur Layouts, die funktioniert haben.
+- Die Bauplatz-Prüfung liest die Farbe der Bauvorschau. Ist die Vorschau bei voller Herauszoom-Stufe zu klein, gilt
+  der Platz als „unbekannt“ und wird trotzdem geklickt; Siege merken sich nur Layouts, die funktioniert haben.
 - Einkommenswerte werden nicht gelesen (nur Speicher-Füllstände). Daher zeitbasierte Budgets.
-- Fabrik-Upgrades auf T2/T3 und T2-Gebäude sind nur vorbereitet (optionale Kalibrierpunkte), nicht aktiv geplant.
+- Fabrik-Upgrade auf T2 und T2-Produktion laufen nur mit den optionalen Kalibrierpunkten; T3 fehlt noch.
+- Die Wellenverfolgung braucht Sicht: ohne Radar oder Späher sind Gegner-Symbole im Nebel unsichtbar.
 - Der Attack-Move ist als Alt+Rechtsklick konfiguriert; falls dein Spiel anders belegt ist, in `settings.json`
   unter `input.attack_move_modifier` ändern (`"alt"`, `"ctrl"`, `"shift"` oder leer für normalen Rechtsklick).
 - Karten > 20 km (2048 Einheiten) haben bei 1080p nur 0,5 px pro Einheit; dort hilft
@@ -226,15 +260,12 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 ## 12. Vorschläge Quality of Life (noch nicht gebaut)
 
 1. **OCR der Einkommenszahlen** (pytesseract) für echte Masse-/Energie-Bilanz statt Füllstandsheuristik.
-2. **Gegner-Icons auf der ganzen Karte** (nicht nur in der Basis) für Rückzug und dynamische Zielwahl.
-3. **Bauplatz-Prüfung** per Farbe der Bauvorschau (grün/rot) vor dem Klick.
-4. **Automatische Start-Slot-Erkennung**: ACU-Icon in Teamfarbe am Spielstart suchen und dem nächsten ARMY-Marker zuordnen.
-5. **Fabrik-Upgrades und T2/T3-Produktion** mit zusätzlichen Kalibrierpunkten.
-6. **Build-Order-Profile pro Karte** als editierbare JSON, inkl. Export/Import der Layouts.
-7. **Overlay-Minikarte** mit geplanten Bauplätzen und Angriffsziel (Live-Kontrolle, was der Bot vorhat).
-8. **Sprachausgabe/Chat-Log** der Ollama-Ratschläge, plus Button „Rat verwerfen“.
-9. **Replay-Auswertung**: nach dem Spiel Log + Ereignisse an Ollama geben und eine Nachbesprechung erzeugen.
-10. **Tray-Icon** statt Konsole, Autostart mit dem Spiel.
+2. **Automatische Start-Slot-Erkennung**: ACU-Icon in Teamfarbe am Spielstart suchen und dem nächsten ARMY-Marker zuordnen.
+3. **T3-Produktion und Experimentals** mit weiteren Kalibrierpunkten.
+4. **Build-Order-Profile pro Karte** als editierbare JSON, inkl. Export/Import der Layouts.
+5. **Sprachausgabe** der Ollama-Ratschläge und der Nachbesprechung.
+6. **Tray-Icon** statt Konsole, Autostart mit dem Spiel.
+7. **Marine**: Werften, Schiffe und Seeziele auf Wasserkarten.
 
 ## 13. Entwicklung
 

@@ -130,6 +130,79 @@ def cmd_layouts(settings: dict, args) -> int:
     return 0
 
 
+def cmd_doctor(settings: dict, args) -> int:
+    """First-run diagnosis: dependencies, game, maps, profile, Ollama."""
+    import importlib
+    import platform
+
+    ok, warn = "  OK   ", "  WARN "
+    print(f"SupComBot doctor  (Python {platform.python_version()}, {platform.system()} {platform.release()})")
+    print(f"{ok}Einstellungen: {config.SETTINGS_FILE}")
+    for mod, why in (("numpy", "Pflicht"), ("PIL", "Pflicht"), ("mss", "Pflicht"), ("keyboard", "Hotkeys"),
+                     ("cv2", "schnelle Bildanalyse"), ("dxcam", "60-fps-Capture")):
+        try:
+            importlib.import_module(mod)
+            print(f"{ok}Modul {mod}")
+        except Exception as exc:
+            print(f"{warn}Modul {mod} fehlt ({why}): {exc}")
+    gd = _game_dir(settings)
+    maps = list_maps(gd)
+    print(f"{ok if maps else warn}Spielordner: {gd}  Karten: {len(maps)}")
+    if not win.IS_WINDOWS:
+        print(f"{warn}Kein Windows: Spielfenster/Eingaben nicht pruefbar")
+        return 0
+    from .profile import Profile
+
+    hwnd = win.find_window(settings.get("window_title", "Forged Alliance"))
+    if hwnd:
+        rect = win.client_rect(hwnd)
+        print(f"{ok}Spielfenster gefunden: {win.window_title(hwnd)} Client {rect[2]}x{rect[3]}")
+        res = (rect[2], rect[3])
+    else:
+        print(f"{warn}Spielfenster nicht gefunden (Titel enthaelt '{settings.get('window_title')}'?). Spiel starten.")
+        res = (1920, 1080)
+    prof = Profile.load(settings["faction"], res)
+    missing = prof.missing_required()
+    print(f"{ok if not missing else warn}Profil {settings['faction']} {res[0]}x{res[1]}: " + ("vollstaendig" if not missing else "fehlend: " + ", ".join(missing)))
+    optional = [k for k, _i, _p, req in __import__('supcombot.profile', fromlist=['CALIBRATION_STEPS']).CALIBRATION_STEPS if not req and not prof.has(k) and not k.startswith("colors.")]
+    if optional:
+        print(f"       optional nicht kalibriert: {', '.join(optional)}")
+    print(f"{ok if prof.team_color else warn}Teamfarbe: {prof.team_color}")
+    print(f"{ok if prof.enemy_colors else warn}Gegnerfarben: {prof.enemy_colors or 'keine (calibrate --only colors.enemy)'}")
+    print(f"{ok if prof.map_rects else warn}Kartenrechtecke: {len(prof.map_rects)}")
+    for name in ("victory", "defeat"):
+        print(f"{ok if name in prof.templates else warn}Vorlage {name}: " + ("vorhanden" if name in prof.templates else "fehlt (Spielende per Hotkey melden oder calibrate --template)"))
+    key = settings.get("input", {}).get("select_acu_key")
+    print(f"{ok if key else warn}ACU-Taste: {key or 'nicht gesetzt (ACU-Rettung aus)'}")
+    if settings.get("use_ollama"):
+        adv = _advisor(settings)
+        if adv.check():
+            print(f"{ok}Ollama: Modell {adv.model}, Optionen {adv.options}")
+        else:
+            print(f"{warn}Ollama: {adv.last_error}")
+    return 0
+
+
+def cmd_reports(settings: dict, args) -> int:
+    from . import report
+
+    files = report.list_reports()
+    if not files:
+        print("Keine Spielberichte in", report.GAMES_DIR)
+        return 0
+    import json
+
+    for f in files:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            print(f"  {d.get('time')}  {d.get('map'):28s} {d.get('result'):5s} {d.get('game_seconds', 0) // 60:3d} min  {d.get('strategy')}  Wellen {len(d.get('waves', []))}")
+            if args.last and f is files[0] and d.get("debrief"):
+                print("\n" + d["debrief"] + "\n")
+        except Exception:
+            print("  ", f.name)
+    return 0
+
+
 def cmd_run(settings: dict, args) -> int:
     from .bot import Bot
     from .game import Game
@@ -231,6 +304,9 @@ def main(argv=None) -> int:
     sub.add_parser("screenshot", help="Screenshot des Spielfensters speichern")
     p_lay = sub.add_parser("layouts", help="gespeicherte Layouts anzeigen")
     p_lay.add_argument("--clear", action="store_true")
+    sub.add_parser("doctor", help="Erstdiagnose: Module, Spiel, Karten, Profil, Ollama")
+    p_rep = sub.add_parser("reports", help="Spielberichte anzeigen")
+    p_rep.add_argument("--last", action="store_true", help="Nachbesprechung des letzten Spiels ausgeben")
     args = parser.parse_args(argv)
 
     settings = config.apply_performance_profile(config.load_settings())
@@ -246,6 +322,7 @@ def main(argv=None) -> int:
     handlers = {
         "run": cmd_run, "calibrate": cmd_calibrate, "maps": cmd_maps, "detect-map": cmd_detect_map,
         "ollama-test": cmd_ollama, "test-input": cmd_test_input, "screenshot": cmd_screenshot, "layouts": cmd_layouts,
+        "doctor": cmd_doctor, "reports": cmd_reports,
     }
     try:
         return handlers[cmd](settings, args)

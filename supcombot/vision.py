@@ -212,6 +212,24 @@ def cluster_points(points, radius: float):
     return [(c[0], c[1], c[2]) for c in clusters]
 
 
+def placement_verdict(frame: np.ndarray, cx: int, cy: int, radius: int = 10, min_pixels: int = 6) -> str:
+    """Colour of the build preview under the cursor: 'ok' (green), 'blocked' (red) or 'unknown'."""
+    h, w = frame.shape[:2]
+    x0, y0 = max(0, cx - radius), max(0, cy - radius)
+    x1, y1 = min(w, cx + radius + 1), min(h, cy + radius + 1)
+    if x1 <= x0 or y1 <= y0:
+        return "unknown"
+    region = frame[y0:y1, x0:x1].astype(np.int16)
+    r, g, b = region[:, :, 0], region[:, :, 1], region[:, :, 2]
+    red = int(((r > 140) & (g < 90) & (b < 90) & (r - g > 70)).sum())
+    green = int(((g > 140) & (r < 120) & (b < 120) & (g - r > 60)).sum())
+    if red >= min_pixels and red > green * 1.5:
+        return "blocked"
+    if green >= min_pixels and green >= red:
+        return "ok"
+    return "unknown"
+
+
 def normalized_correlation(a: np.ndarray, b: np.ndarray) -> float:
     a = gray(a) if a.ndim == 3 else a.astype(np.float32)
     b = gray(b) if b.ndim == 3 else b.astype(np.float32)

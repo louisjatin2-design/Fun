@@ -77,3 +77,18 @@ def air_queue(state: BotState, available: List[str], count: int) -> List[str]:
             out.append(available[0])
         state.air_ordered += 1
     return out
+
+
+def tier_roles(roles: List[str], tech: int, available: List[str]) -> List[str]:
+    """Map T1 roles to their T2 variants when the factory is upgraded and the T2 buttons are calibrated."""
+    if tech < 2:
+        return roles
+    out = []
+    for r in roles:
+        t2 = r + "2"
+        out.append(t2 if t2 in available else r)
+    return out
+
+
+def wants_home_guard(state: BotState) -> bool:
+    return state.strategy == "turtle" or state.aggression == 1

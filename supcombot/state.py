@@ -20,6 +20,9 @@ class Structure:
     last_queue_at: float = 0.0
     rally_set: bool = False
     kind: str = "land"                 # factory kind
+    repeat_set: bool = False
+    home_guard: bool = False
+    upgrading_until: float = 0.0
 
     def pos(self) -> Tuple[float, float]:
         return self.x, self.z
@@ -31,6 +34,12 @@ class Wave:
     size: int
     target: Tuple[float, float]
     reason: str = "auto"
+    last_pos: Optional[Tuple[float, float]] = None   # where the wave was last seen (live vision)
+    seen: int = 0                                     # friendly icons near last_pos
+    retreating: bool = False
+    done: bool = False
+    last_update: float = 0.0
+    lost_since: float = 0.0
 
 
 @dataclass
@@ -66,6 +75,13 @@ class BotState:
     last_status: str = ""
     layout_slots: int = 0
     idle_engineers_seen: int = 0
+    blocked_spots: List[Tuple[float, float]] = field(default_factory=list)   # placements the game refused
+    placements_rejected: int = 0
+    factory_upgrades: int = 0
+    acu_retreats: int = 0
+    last_acu_action: float = 0.0
+    strategy_auto: Optional[str] = None
+    debrief: str = ""
 
     # ------------------------------------------------------------------ helpers
     def game_time(self) -> float:
@@ -122,4 +138,7 @@ class BotState:
             "advice": (self.advice or {}).get("note", ""),
             "layoutSlots": self.layout_slots,
             "idleEngineersSeen": self.idle_engineers_seen,
+            "placementsRejected": self.placements_rejected,
+            "factoryUpgrades": self.factory_upgrades,
+            "activeWaves": [{"size": w.size, "seen": w.seen, "retreating": w.retreating} for w in self.waves if not w.done],
         }

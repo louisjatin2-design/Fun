@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
-from . import layouts, vision
+from . import layouts, report, vision, win
 from .camera import CalibrationError, Camera
 from .capture import crop
 from .game import Game
@@ -17,7 +17,7 @@ from .maps import MapInfo
 from .ollama import OllamaAdvisor
 from .planner import attack as attack_plan
 from .planner import production
-from .planner.builder import MapContext, Wish, choose_spot, dist, make_context, opening_orders, wishlist
+from .planner.builder import FOOTPRINT, MapContext, Wish, choose_spot, dist, make_context, opening_orders, wishlist
 from .planner.economy import Economy
 from .state import BotState, Structure
 
@@ -49,6 +49,9 @@ class Bot(threading.Thread):
         self.base_radius = 60.0
         self._pending_actions: List[str] = []
         self.last_defense = 0.0
+        self.user_active_until = 0.0
+        self.last_factory_upgrade_check = 0.0
+        self.auto_strategy = "balanced"
         vis = settings.get("vision", {})
         self.stream = FrameStream(game, fps=vis.get("fps", 20), backend=vis.get("backend", "auto"))
         game.stream = self.stream
@@ -60,7 +63,10 @@ class Bot(threading.Thread):
     def new_game(self) -> None:
         with self.lock:
             self.state = BotState()
-            self.state.strategy = self.settings.get("strategy", "balanced")
+            sk0 = layouts.start_key(*self.ctx.start)
+            self.auto_strategy = layouts.best_strategy(self.map.key, sk0, "balanced")
+            self.state.strategy = self.auto_strategy if self.settings.get("strategy") == "auto" else self.settings.get("strategy", "balanced")
+            self.state.strategy_auto = self.auto_strategy
             self.state.aggression = int(self.settings.get("aggression", 2))
             self.layout_used = set()
             self.layout = None
@@ -119,6 +125,10 @@ class Bot(threading.Thread):
                     self._set_status("Spiel nicht im Vordergrund - warte")
                     time.sleep(0.8)
                     continue
+                if self.user_active():
+                    self._set_status("Du bewegst die Maus - Bot wartet")
+                    time.sleep(0.5)
+                    continue
                 self.game.inputs.abort.clear()
                 self.tick()
                 time.sleep(float(self.settings.get("loop_interval", 3.0)))
@@ -159,6 +169,23 @@ class Bot(threading.Thread):
             elif a == "new_game":
                 self.new_game()
 
+    def user_active(self) -> bool:
+        """True while the user moves the mouse (the bot yields for `yield_to_user_seconds`)."""
+        grace = float(self.settings.get("input", {}).get("yield_to_user_seconds", 4) or 0)
+        if grace <= 0 or self.game.dry_run or not win.IS_WINDOWS:
+            return False
+        now = time.time()
+        inp = self.game.inputs
+        try:
+            cur = win.cursor_pos()
+        except Exception:
+            return False
+        if inp.last_pos is not None and now - inp.last_move_time > 0.4:
+            if abs(cur[0] - inp.last_pos[0]) + abs(cur[1] - inp.last_pos[1]) > 25:
+                self.user_active_until = now + grace
+                inp.last_pos = cur
+        return now < self.user_active_until
+
     def _set_status(self, text: str) -> None:
         self.status["status"] = text
         self._refresh_status()
@@ -190,6 +217,13 @@ class Bot(threading.Thread):
             "analysis_ms": round(self.percepts().analysis_ms, 1),
             "allies": len(self.settings.get("ally_slots", [])),
             "enemies": len(self.ctx.enemies),
+            "friendly_clusters": self.percepts().friendly_clusters,
+            "enemy_clusters": self.percepts().enemy_clusters,
+            "placements_rejected": s.placements_rejected,
+            "factory_upgrades": s.factory_upgrades,
+            "strategy_auto": self.auto_strategy,
+            "debrief": s.debrief,
+            "events": list(s.events[-int(self.settings.get("overlay", {}).get("log_lines", 5)):]),
         })
 
     def set_slots(self, start_slot: int, enemy_slots, ally_slots) -> None:
@@ -230,14 +264,19 @@ class Bot(threading.Thread):
         else:
             self.update_army_estimate(img)
         actions = 0
+        if live and p.map_view_valid and p.enemies_near_base >= int(self.settings.get("input", {}).get("acu_retreat_threshold", 6)):
+            actions += self.handle_acu_rescue(p)
         if self.settings.get("auto_defense") and live and p.map_view_valid and p.enemies_near_base > 0:
             actions += self.handle_defense(p)
+        if live and p.map_view_valid and (p.friendly_clusters or p.enemy_clusters):
+            actions += self.handle_waves(p)
         if self.settings.get("build_manager"):
             actions += self.handle_idle_engineers(max_jobs=2)
         if self.settings.get("production_manager"):
             actions += self.handle_factories()
         if self.settings.get("eco_manager") and actions < 2:
             self.handle_upgrades()
+            self.handle_factory_upgrade()
         if self.settings.get("auto_attack") and attack_plan.should_launch(s, self.settings):
             self.launch_wave("auto")
         self._after_tick()
@@ -261,7 +300,7 @@ class Bot(threading.Thread):
     def update_strategy(self) -> None:
         s = self.state
         fresh = s.advice and time.time() - s.advice_at < 180 and self.settings.get("use_ollama")
-        s.strategy = self.settings.get("strategy", "balanced")
+        s.strategy = self.auto_strategy if self.settings.get("strategy") == "auto" else self.settings.get("strategy", "balanced")
         s.aggression = int(self.settings.get("aggression", 2))
         s.focus = "land"
         if fresh and s.advice:
@@ -337,18 +376,32 @@ class Bot(threading.Thread):
                    for st in s.structures if st.role not in ("mex", "hydro")]
         if self.settings.get("use_layout_memory"):
             rec = layouts.store_result(self.map.key, layouts.start_key(*self.ctx.start), won, entries,
-                                       {"faction": self.settings.get("faction"), "game_time": int(s.game_time())})
+                                       {"faction": self.settings.get("faction"), "game_time": int(s.game_time()), "strategy": s.strategy})
             s.layout_slots = len(rec.get("entries", []))
         s.event(("SIEG" if won else "NIEDERLAGE") + f" ({how}), Layout " + ("gespeichert" if won else "bewertet"))
         self.game.inputs.abort.set()
         self._refresh_status()
+        if self.settings.get("debrief", True):
+            try:
+                path = report.write_report(s, self.settings, self.map.name, self.map.key, int(self.settings.get("start_slot", 1)), s.result)
+            except Exception as exc:
+                log.warning("Bericht nicht geschrieben: %s", exc)
+                return
+
+            def worker() -> None:
+                text = report.debrief(self.advisor, path) if self.settings.get("use_ollama") else None
+                if text:
+                    s.debrief = text
+                    s.event("Nachbesprechung von Ollama liegt vor (siehe Overlay/Log)")
+
+            threading.Thread(target=worker, name="debrief", daemon=True).start()
 
     # ------------------------------------------------------------------ opening
     def do_opening(self) -> None:
         s = self.state
         g = self.game
         if not g.ui_visible("ui.build.mex"):
-            self.camera.click_world(*self.ctx.start)
+            self.select_acu()
             g.wait(0.4)
             if not g.ui_visible("ui.build.mex"):
                 g.deselect()
@@ -356,7 +409,8 @@ class Bot(threading.Thread):
                 if s.game_time() > 90:
                     s.opening_done = True
                 return
-        orders = opening_orders(s, self.ctx, self.layout, self.layout_used)
+        sequence = (self.settings.get("openings") or {}).get(s.strategy)
+        orders = opening_orders(s, self.ctx, self.layout, self.layout_used, sequence)
         for w in orders:
             if not self.place(w, w.pos):
                 continue
@@ -366,15 +420,110 @@ class Bot(threading.Thread):
         s.event(f"Eroeffnung: {len(orders)} Bauauftraege fuer den ACU")
 
     def place(self, wish: Wish, pos: Tuple[float, float], builder: str = "eng") -> bool:
-        """Click the build button, then shift-click the world position. Returns False if not calibrated."""
+        """Click the build button, check the preview colour, then shift-click the world position."""
         key = "ui.build." + wish.role
         if not self.game.profile.has(key):
             return False
         if wish.role in ("pgen2", "pd2", "aa2", "shield2") and self.game.profile.has("ui.build.tab_t2"):
             self.game.click_ui("ui.build.tab_t2")
         self.game.click_ui(key)
+        if self.settings.get("input", {}).get("placement_check", True) and wish.role not in ("mex", "hydro") and not self.game.dry_run:
+            checked = self.validate_spot(wish, pos)
+            if checked is None:
+                self.game.press("escape")
+                return False
+            pos = checked
         self.camera.click_world(pos[0], pos[1], shift=True)
+        wish.pos = pos
         return True
+
+    def validate_spot(self, wish: Wish, pos: Tuple[float, float], attempts: int = 4) -> Optional[Tuple[float, float]]:
+        """Hover the template over the spot and read its colour; move on to another spot when it is red."""
+        s = self.state
+        upp = max(0.25, self.camera.units_per_pixel())
+        radius = int(FOOTPRINT.get(wish.role, 3.0) / upp / 2) + 3
+        for _ in range(attempts):
+            cx, cy = self.camera.world_to_client(pos[0], pos[1])
+            self.game.hover(cx, cy)
+            self.game.wait(0.2)
+            frame = self.game.screenshot()
+            verdict = vision.placement_verdict(frame, cx, cy, radius=radius, min_pixels=max(3, radius // 2))
+            if verdict != "blocked":
+                return pos
+            s.blocked_spots.append(pos)
+            s.placements_rejected += 1
+            self.game.save_debug(frame, f"blocked_{wish.role}")
+            alt = choose_spot(s, self.ctx, Wish(wish.role, wish.prio, toward_enemy=wish.toward_enemy, near_mex=wish.near_mex),
+                              self.layout, self.layout_used, self.base_radius)
+            if alt is None or alt == pos:
+                s.event(f"Kein gueltiger Bauplatz fuer {wish.role}")
+                return None
+            pos = alt
+        return pos
+
+    def select_acu(self) -> None:
+        key = (self.settings.get("input", {}).get("select_acu_key") or "").strip().lower()
+        if key:
+            self.game.press(key)
+        else:
+            self.camera.click_world(*self.ctx.start)
+
+    def handle_acu_rescue(self, p: Percepts) -> int:
+        """Many enemy icons in the base: pull the ACU back behind the base (needs input.select_acu_key)."""
+        s = self.state
+        key = (self.settings.get("input", {}).get("select_acu_key") or "").strip()
+        if not key or time.time() - s.last_acu_action < 30:
+            return 0
+        s.last_acu_action = time.time()
+        safe = (self.ctx.start[0] + self.ctx.away[0] * 20, self.ctx.start[1] + self.ctx.away[1] * 20)
+        self.game.press(key)
+        self.game.wait(0.2)
+        self.camera.click_world(safe[0], safe[1], button="right")
+        self.game.deselect()
+        s.acu_retreats += 1
+        s.event(f"ACU-Rueckzug: {p.enemies_near_base} Gegner-Symbole in der Basis")
+        return 1
+
+    def handle_waves(self, p: Percepts) -> int:
+        """Closed loop for running waves: retreat when outnumbered, advance to the next target when done."""
+        s = self.state
+        actions = attack_plan.manage_waves(s, self.ctx, p.friendly_clusters, p.enemy_clusters, time.time(), self.base_radius)
+        done = 0
+        mod = self.settings.get("input", {}).get("attack_move_modifier", "alt") or None
+        for kind, wave, target in actions[:2]:
+            if wave.last_pos is None:
+                continue
+            self.camera.box_select_world(wave.last_pos[0], wave.last_pos[1], 22)
+            self.game.wait(0.25)
+            if kind == "retreat":
+                self.camera.click_world(self.ctx.rally[0], self.ctx.rally[1], button="right")
+            elif kind == "advance" and target:
+                self.camera.click_world(target[0], target[1], button="right", modifier=mod)
+            self.game.deselect()
+            done += 1
+        return done
+
+    def handle_factory_upgrade(self) -> None:
+        """Upgrade the first land factory to a T2 HQ when the economy allows (needs ui.factory.upgrade)."""
+        s, g = self.state, self.game
+        if not g.profile.has("ui.factory.upgrade") or s.factory_upgrades > 0:
+            return
+        if time.time() - self.last_factory_upgrade_check < 60 or not Economy.can_upgrade_factory(s):
+            return
+        self.last_factory_upgrade_check = time.time()
+        facs = [f for f in s.factories("land") if time.time() - f.ordered_at > 120]
+        if not facs:
+            return
+        fac = facs[0]
+        self.camera.click_world(fac.x, fac.z)
+        g.wait(0.35)
+        if g.ui_visible("ui.factory.upgrade"):
+            g.click_ui("ui.factory.upgrade")
+            fac.tech = 2
+            fac.upgrading_until = time.time() + 240
+            s.factory_upgrades += 1
+            s.event("Fabrik-Upgrade auf T2 gestartet")
+        g.deselect()
 
     # ------------------------------------------------------------------ engineers
     def handle_idle_engineers(self, max_jobs: int = 2) -> int:
@@ -406,9 +555,9 @@ class Bot(threading.Thread):
         budget = Economy.build_budget(s)
         now = time.time()
         in_progress = sum(1 for st in s.structures if now - st.ordered_at < 120 and st.role not in ("mex",))
-        orders = 0
+        orders: List[str] = []
         for w in wishes:
-            if orders >= max_orders:
+            if len(orders) >= max_orders:
                 break
             if in_progress >= budget and w.prio < 95:
                 break
@@ -418,12 +567,13 @@ class Bot(threading.Thread):
             if pos is None:
                 continue
             if self.place(w, pos):
+                pos = w.pos or pos   # place() may have moved it after a red preview
                 s.add_structure(w.role, pos[0], pos[1], marker=w.marker)
-                orders += 1
+                orders.append(w.role)
                 in_progress += 1
         if orders:
-            s.event(f"Ingenieur: {orders} Auftraege ({', '.join(w.role for w in wishes[:orders])})")
-        return orders > 0
+            s.event(f"Ingenieur: {len(orders)} Auftraege ({', '.join(orders)})")
+        return bool(orders)
 
     def assist_or_patrol(self) -> None:
         """Nothing to build: assist the newest factory (right click on it) or patrol-reclaim around the base."""
@@ -477,26 +627,44 @@ class Bot(threading.Thread):
     def queue_units(self, kind: str, fac: Optional[Structure]) -> None:
         s, g = self.state, self.game
         n = Economy.factory_queue_size(s)
+        if fac is None:
+            # Unknown which factory: assume the one queued least recently.
+            cands = [f for f in s.factories(kind)]
+            fac = min(cands, key=lambda f: f.last_queue_at) if cands else None
+        if fac and fac.upgrading_until > time.time():
+            g.deselect()
+            return
+        tech = fac.tech if fac else 1
         if kind == "land":
-            avail = [r for r in LAND_ROLES if g.profile.has(f"ui.factory.land.{r}")]
-            roles = production.land_queue(s, self.settings, avail, n)
+            avail = [r for r in LAND_ROLES + ("eng2", "tank2", "maa2") if g.profile.has(f"ui.factory.land.{r}")]
+            roles = production.tier_roles(production.land_queue(s, self.settings, [r for r in avail if not r.endswith("2")], n), tech, avail)
+            if tech >= 2 and g.profile.has("ui.factory.tab_t2") and any(r.endswith("2") for r in roles):
+                g.click_ui("ui.factory.tab_t2")
         else:
             avail = [r for r in AIR_ROLES if g.profile.has(f"ui.factory.air.{r}")]
             roles = production.air_queue(s, avail, n)
         for r in roles:
             g.click_ui(f"ui.factory.{kind}.{r}")
-        if fac is None:
-            # Unknown which factory: assume the one queued least recently.
-            cands = [f for f in s.factories(kind)]
-            fac = min(cands, key=lambda f: f.last_queue_at) if cands else None
         if fac:
             fac.queued_units += len(roles)
             fac.last_queue_at = time.time()
+            if g.profile.has("ui.factory.repeat") and not fac.repeat_set:
+                g.click_ui("ui.factory.repeat")
+                fac.repeat_set = True
+                fac.last_queue_at = time.time() + 240   # repeat build: re-queue much later
             if not fac.rally_set:
-                self.camera.click_world(self.ctx.rally[0], self.ctx.rally[1], button="right")
+                rally = self.ctx.rally
+                if kind == "air" and self.ctx.nearest_enemy:
+                    # Forward rally for air: scouts and interceptors give vision over the lane.
+                    rally = (self.ctx.rally[0] + self.ctx.toward[0] * self.ctx.enemy_distance * 0.2,
+                             self.ctx.rally[1] + self.ctx.toward[1] * self.ctx.enemy_distance * 0.2)
+                elif kind == "land" and production.wants_home_guard(s) and len(s.factories("land")) >= 2 and fac is s.factories("land")[1]:
+                    rally = (self.ctx.start[0] + self.ctx.toward[0] * 15, self.ctx.start[1] + self.ctx.toward[1] * 15)
+                    fac.home_guard = True
+                self.camera.click_world(rally[0], rally[1], button="right")
                 fac.rally_set = True
         g.deselect()
-        s.event(f"Fabrik ({kind}): {', '.join(roles)}")
+        s.event(f"Fabrik ({kind}{' T2' if tech >= 2 else ''}): {', '.join(roles)}")
 
     # ------------------------------------------------------------------ upgrades
     def handle_upgrades(self) -> None:
@@ -537,5 +705,5 @@ class Bot(threading.Thread):
         self.game.wait(0.3)
         mod = self.settings.get("input", {}).get("attack_move_modifier", "alt") or None
         self.camera.click_world(target[0], target[1], button="right", modifier=mod)
-        attack_plan.record_wave(s, size, target, reason)
+        attack_plan.record_wave(s, size, target, reason, self.ctx.rally)
         self.game.deselect()

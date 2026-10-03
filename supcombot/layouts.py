@@ -66,7 +66,11 @@ def store_result(map_key: str, start_key: str, won: bool, entries: List[dict], e
             rec["entries"] = []
             rec["wins"] = 0
     if extra:
+        strategy = extra.pop("strategy", None)
         rec.update(extra)
+        if strategy:
+            stats = rec.setdefault("strategy_stats", {}).setdefault(strategy, {"wins": 0, "losses": 0})
+            stats["wins" if won else "losses"] += 1
     all_recs[start_key] = rec
     _path(map_key).write_text(json.dumps(all_recs, indent=1), encoding="utf-8")
     log.info("Layout gespeichert: %s / %s (won=%s, %d Eintraege)", map_key, start_key, won, len(rec["entries"]))
@@ -83,3 +87,15 @@ def clear_all() -> int:
 
 def start_key(x: float, z: float) -> str:
     return f"{int(round(x))}_{int(round(z))}"
+
+
+def best_strategy(map_key: str, start_key: str, default: str = "balanced") -> str:
+    """Strategy with the best smoothed win rate on this map/start (used for strategy "auto")."""
+    rec = load_map_layouts(map_key).get(start_key) or {}
+    stats = rec.get("strategy_stats") or {}
+    best, best_rate = default, -1.0
+    for strat, st in stats.items():
+        rate = (st.get("wins", 0) + 1) / (st.get("wins", 0) + st.get("losses", 0) + 2)
+        if rate > best_rate:
+            best, best_rate = strat, rate
+    return best
