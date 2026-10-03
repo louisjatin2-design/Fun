@@ -1,58 +1,177 @@
-# 🌊 Abyssal — Tiefsee-Förderung
+# SupComBot – externer Bot für Supreme Commander: Forged Alliance (Steam)
 
-Ein Idle-Tycoon-Spiel als **einzelne, einbettbare HTML-Datei**. Keine Dependencies,
-kein Build-Step, kein npm — einfach `index.html` öffnen oder per `<iframe>` einbetten.
+Eigenständige Windows-App, die das **unveränderte Steam-Spiel** steuert: keine Mod, kein FAF-Loader.
+Der Bot sieht das Spiel per Screenshot, liest Kartendaten direkt aus dem Steam-Ordner und spielt
+mit **Maus- und Tastatureingaben** (SendInput). Ein Overlay-Fenster über dem Spiel zeigt Status und Schalter.
 
-Dunkler Tiefsee-Look (Navy/Tiefseeblau) mit Biolumineszenz-Akzenten in Cyan & Magenta.
+**Funktionen**
 
-## Spielprinzip
+- Kartenanalyse: Mass-/Hydro-Punkte und Startpositionen aus `<map>_save.lua`, Kartenerkennung per Vorschaubild (`.scmap`)
+- Bauen: ACU-Eröffnung, Ingenieure bekommen Mex, Generatoren, Fabriken, Radar, Verteidigung, Speicher (Prioritätenliste)
+- Produktion: Fabriken werden mit Ingenieuren und einer Armee-Mischung befüllt, Sammelpunkt wird gesetzt
+- Wirtschaft: Masse-/Energie-Speicherleisten werden gelesen, Stall-Schutz, Mex-Upgrades nach Budget
+- Angriffe: per Hotkey ein/aus, Wellen ab einstellbarer Schwelle, Ziele = gegnerische Expansionen, dann Basis
+- Ollama: lokale KI bewertet den Zustand alle 45 s und passt Strategie, Schwelle, Ingenieur-Zahl, Armee-Mix an
+- Layout-Gedächtnis: nach einem Sieg wird das Basis-Layout je Karte + Startposition gespeichert und beim
+  nächsten Spiel bevorzugt wiederverwendet (zwei Niederlagen in Folge verwerfen es), per Schalter abschaltbar
+- Overlay mit allen Schaltern, Strategie (balanced/eco/rush/turtle), Aggression, Schwellen, globale Hotkeys
 
-- **Credits** ticken automatisch — manuell fördern per Tap als Einstieg.
-- **6 Generatoren** als Kette mit exponentiell steigenden Kosten:
-  Gezeitenbecken → Kelpfarm → Riff → Tiefseegraben → Hydrothermalquelle → Abyssalkern
-- Pro Generator: **Kauf ×1/×10/×100**, ein **Upgrade-Track** (×2 Produktion je Stufe)
-  und ein **Manager**, der den Generator automatisiert.
+> **Wichtig:** Der Bot kann nicht getestet werden, ohne dass das Spiel läuft. Alle Spiel-Positionen
+> (Buttons, Leisten) werden einmalig mit dem Kalibrier-Assistenten auf deinem PC aufgenommen. Lies
+> den Abschnitt „Bekannte Grenzen“ bevor du dich wunderst.
 
-### Der Twist: Druck
+---
 
-Tiefere Generatoren erzeugen **Druck**. Übersteigt der Druck die Kapazität deiner
-Hülle, droht eine **Implosion** und die Produktion bricht drastisch ein (bis −85 %).
-Kaufe **Verstärkungen**, um die Kapazität zu erhöhen — das erzwingt echte
-Kaufentscheidungen zwischen mehr Produktion und mehr Stabilität.
+## 1. Installation (Copy & Paste)
 
-### Prestige: Tauchgang zurücksetzen
+Voraussetzungen: Windows 10/11, Steam-Version von Forged Alliance, **Python 3.10+** (python.org, Haken bei
+„Add python.exe to PATH“), Git. Ollama ist optional.
 
-Setze Credits, Generatoren und Verstärkungen zurück und erhalte permanente
-**Perlen**, die als globaler Produktions-Multiplikator über alle künftigen
-Tauchgänge wirken (`Perlen = floor(√(verdiente Credits / 1e6))`).
+PowerShell öffnen (Win+X → „Terminal“), dann:
 
-## Features
-
-- 📱 **Mobile-first**: Touch-Events, große Tap-Targets, responsive bis 320 px,
-  Canvas auf `devicePixelRatio` skaliert.
-- 💾 **Autosave** alle 5 s in `localStorage` + **Offline-Progress** (gedeckelt auf 8 h).
-  Fällt in Sandboxes ohne Storage sauber auf In-Memory zurück.
-- ♿ **Barrierefrei**: sichtbarer Keyboard-Fokus, `prefers-reduced-motion` respektiert.
-- 🔢 Zahl-Formatierung mit Abkürzungen (1.2K, 3.4M, 5.6B, …).
-- 📤 Export/Import des Spielstands als Base64-String.
-
-## Einbetten
-
-```html
-<iframe src="index.html"
-        width="420" height="800"
-        style="border:0;border-radius:12px"
-        title="Abyssal — Tiefsee-Förderung"></iframe>
+```powershell
+cd $env:USERPROFILE\Documents
+git clone https://github.com/louisjatin2-design/Fun.git SupComBot
+cd SupComBot
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Oder direkt `index.html` im Browser öffnen.
+Update später:
 
-## Balancing (Kurzfassung)
+```powershell
+cd $env:USERPROFILE\Documents\SupComBot
+git pull
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
 
-- Kostenfaktor pro Kauf: **1.15** (klassische Idle-Kurve).
-- Erster Generator kostet 12 Credits, Tap gibt ≥1 → erster Kauf in <30 s.
-- Pro Tiefenstufe grob ×8 Produktion / ×11 Kosten → tiefere Generatoren sind
-  teuer, aber stark.
-- Druck nur bei den tieferen Generatoren (ab „Riff"). Kapazität über Verstärkungen.
+## 2. Spiel vorbereiten
 
-Details als Kommentare in `index.html`.
+1. Steam → Forged Alliance → Eigenschaften → Startoptionen: `/windowed` (Fenstermodus ist Pflicht,
+   sonst ist das Overlay unsichtbar und Screenshots schlagen fehl). Alternativ Borderless-Tool.
+2. Im Spiel eine feste Auflösung wählen (z. B. 1920×1080). Das Profil ist an Fraktion + Auflösung gebunden.
+3. Skirmish gegen KI starten. Merke dir deinen **Start-Slot** (Lobby-Platz 1..N) und deine Fraktion.
+
+## 3. Einmalig kalibrieren
+
+Im laufenden Skirmish (Spiel im Vordergrund):
+
+```powershell
+cd $env:USERPROFILE\Documents\SupComBot
+.\calibrate.ps1 --faction uef
+```
+
+Der Assistent sagt dir Schritt für Schritt, worauf du mit der Maus zeigen sollst (Baumenü-Buttons,
+Fabrik-Buttons, Idle-Ingenieur-Symbol, Masse-/Energie-Leiste, deine Teamfarbe, Kartenrechteck bei voller
+Herauszoom-Stufe). **F8** übernimmt, **F7** überspringt optionale Schritte, **F6** bricht ab.
+Pro Fraktion einmal wiederholen (`--faction cybran` usw.). Einzelne Punkte nachbessern:
+
+```powershell
+.\calibrate.ps1 --only ui.build.mex ui.idle_engineer
+.\calibrate.ps1 --map-rect                 # nur Kartenrechteck (pro Karte einmal)
+.\calibrate.ps1 --template victory         # nach einem Sieg: Sieg-Dialog aufnehmen (Auto-Erkennung)
+.\calibrate.ps1 --template defeat
+```
+
+Details: [docs/KALIBRIERUNG.md](docs/KALIBRIERUNG.md).
+
+## 4. Spielen
+
+```powershell
+cd $env:USERPROFILE\Documents\SupComBot
+.\start.ps1                       # Karte wird automatisch erkannt
+.\start.ps1 --map "Seton"         # oder Karte vorgeben
+.\start.ps1 --debug               # ausführliches Log + Screenshots in %APPDATA%\SupComBot\debug
+```
+
+Ablauf: Spiel laden → im Spiel ganz herauszoomen → `start.ps1` → Overlay erscheint → Start-Slot im
+Overlay prüfen („Start-Slot +“) → **Ctrl+Alt+B** schaltet den Bot ein. Der Bot übernimmt dann Maus und
+Tastatur in kurzen Schüben (ca. alle 3 s). Solange er an ist, solltest du nicht selbst klicken.
+
+| Hotkey | Funktion |
+|---|---|
+| Ctrl+Alt+B | Bot ein/aus (sofortiger Stopp aller Eingaben) |
+| Ctrl+Alt+A | Automatische Angriffe ein/aus |
+| Ctrl+Alt+X | Jetzt mit allem am Sammelpunkt angreifen |
+| Ctrl+Alt+S | Strategie wechseln (balanced → eco → rush → turtle) |
+| Ctrl+Alt+O | Overlay ein-/ausblenden |
+| Ctrl+Alt+W / Ctrl+Alt+L | Sieg / Niederlage melden (Layout-Gedächtnis), falls keine Dialog-Vorlage aufgenommen wurde |
+| Ctrl+Alt+N | Neues Spiel (Zustand zurücksetzen) |
+| Ctrl+Alt+Q | Beenden |
+
+Alle Hotkeys stehen in `%APPDATA%\SupComBot\settings.json` und sind änderbar.
+
+## 5. Ollama
+
+Ollama muss laufen (`ollama serve`) und ein Modell installiert sein, z. B.:
+
+```powershell
+ollama pull llama3.1
+cd $env:USERPROFILE\Documents\SupComBot
+.\.venv\Scripts\python.exe -m supcombot ollama-test
+```
+
+`model: "auto"` in den Einstellungen nimmt das erste installierte Modell (bevorzugt llama3/qwen/mistral/gemma/phi).
+Die KI bekommt alle 45 s den Zustand (Wirtschaft, Gebäude, Armee-Schätzung, Ereignisse) und antwortet mit JSON;
+nur erlaubte, begrenzte Felder werden übernommen. Rat gilt 3 Minuten, danach greifen wieder die Overlay-Einstellungen.
+Ohne Ollama läuft der Bot ganz normal.
+
+## 6. Weitere Befehle
+
+```powershell
+.\.venv\Scripts\python.exe -m supcombot maps          # erkannte Karten mit Mex-Zahl und Start-Slots
+.\.venv\Scripts\python.exe -m supcombot detect-map    # welche Karte sieht der Bot gerade?
+.\.venv\Scripts\python.exe -m supcombot screenshot    # Screenshot des Spielfensters speichern
+.\.venv\Scripts\python.exe -m supcombot test-input    # bewegt die Maus im Quadrat (SendInput-Test)
+.\.venv\Scripts\python.exe -m supcombot layouts       # gespeicherte Layouts; --clear löscht alle
+.\.venv\Scripts\python.exe -m supcombot run --dry-run # nur planen und loggen, keine Eingaben
+```
+
+Dateien: Einstellungen `%APPDATA%\SupComBot\settings.json`, Profile `...\profiles\`, Layouts `...\layouts\`,
+Logs `...\logs\supcombot.log`.
+
+## 7. Wie es funktioniert
+
+Siehe [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md). Kurz: Der Bot arbeitet auf **voller Herauszoom-Stufe**,
+dort ist die ganze Karte sichtbar und Weltkoordinaten lassen sich linear auf das erkannte Kartenrechteck
+abbilden. Mass-Punkte werden so auf 1–2 Pixel genau getroffen, der Mex-Bauplatz rastet im Spiel von selbst ein.
+Einheiten erkennt der Bot über die Idle-Symbole der Avatar-Leiste (Ingenieure, Fabriken) und über Farbblobs
+in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchführung.
+
+## 8. Bekannte Grenzen (ehrlich)
+
+- **Ungetestet gegen das echte Spiel.** Ich konnte das Spiel hier nicht starten. Die Logik ist mit Tests und einem
+  Dry-Run abgesichert, die Spiel-Interaktion (Buttons, Zoomverhalten, Attack-Move) musst du beim ersten Lauf prüfen.
+  `--debug` legt Screenshots ab, das Log zeigt jede Eingabe.
+- Der Bot teilt sich Maus und Tastatur mit dir. Gleichzeitiges Spielen geht nicht; Ctrl+Alt+B stoppt sofort.
+- Keine Gegner-Wahrnehmung: Angriffsziele sind bekannte Positionen (Mex-Punkte auf Gegnerseite, Startpunkt),
+  keine Rückzugslogik, keine automatische Verteidigung. Verluste werden über Wellen geschätzt.
+- Bauplätze werden nicht auf Gültigkeit geprüft. Ungültige Plätze (Klippen, Wasser) ignoriert das Spiel stillschweigend;
+  der Bot glaubt dann, gebaut zu haben. Siege merken sich daher nur Layouts, die funktioniert haben.
+- Einkommenswerte werden nicht gelesen (nur Speicher-Füllstände). Daher zeitbasierte Budgets.
+- Fabrik-Upgrades auf T2/T3 und T2-Gebäude sind nur vorbereitet (optionale Kalibrierpunkte), nicht aktiv geplant.
+- Der Attack-Move ist als Alt+Rechtsklick konfiguriert; falls dein Spiel anders belegt ist, in `settings.json`
+  unter `input.attack_move_modifier` ändern (`"alt"`, `"ctrl"`, `"shift"` oder leer für normalen Rechtsklick).
+- Karten > 20 km (2048 Einheiten) haben bei 1080p nur 0,5 px pro Einheit; dort hilft
+  `input.precision_zoom_notches` (z. B. 6): vor jedem Klick wird am Cursor hineingezoomt und wieder heraus.
+
+## 9. Vorschläge Quality of Life (noch nicht gebaut)
+
+1. **OCR der Einkommenszahlen** (pytesseract) für echte Masse-/Energie-Bilanz statt Füllstandsheuristik.
+2. **Gegner-Icons erkennen** (Teamfarben-Blobs auf der ganzen Karte) für Verteidigung, Rückzug und Zielwahl.
+3. **Bauplatz-Prüfung** per Farbe der Bauvorschau (grün/rot) vor dem Klick.
+4. **Automatische Start-Slot-Erkennung**: ACU-Icon in Teamfarbe am Spielstart suchen und dem nächsten ARMY-Marker zuordnen.
+5. **Fabrik-Upgrades und T2/T3-Produktion** mit zusätzlichen Kalibrierpunkten.
+6. **Build-Order-Profile pro Karte** als editierbare JSON, inkl. Export/Import der Layouts.
+7. **Overlay-Minikarte** mit geplanten Bauplätzen und Angriffsziel (Live-Kontrolle, was der Bot vorhat).
+8. **Sprachausgabe/Chat-Log** der Ollama-Ratschläge, plus Button „Rat verwerfen“.
+9. **Replay-Auswertung**: nach dem Spiel Log + Ereignisse an Ollama geben und eine Nachbesprechung erzeugen.
+10. **Tray-Icon** statt Konsole, Autostart mit dem Spiel.
+
+## 10. Entwicklung
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install pytest
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Alle Planungsmodule (`supcombot/planner`) sind reine Logik ohne Bildschirmzugriff und laufen auf jedem System.
