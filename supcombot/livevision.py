@@ -145,6 +145,9 @@ class Percepts:
     enemies_near_base: int = 0
     enemy_world: Optional[Tuple[float, float]] = None
     enemy_points: List[Tuple[int, int]] = field(default_factory=list)   # client coords for the preview
+    enemy_clusters: List[Tuple[float, float, int]] = field(default_factory=list)  # world x, z, icon count (whole map)
+    enemies_total: int = 0
+    analysis_ms: float = 0.0
     end_result: Optional[str] = None
     fps: float = 0.0
     backend: str = "none"
@@ -153,7 +156,8 @@ class Percepts:
 class Perception(threading.Thread):
     """Analyses the live stream a few times per second and publishes Percepts."""
 
-    def __init__(self, stream: FrameStream, game, camera, ctx, hz: float = 5.0, base_radius: float = 60.0) -> None:
+    def __init__(self, stream: FrameStream, game, camera, ctx, hz: float = 5.0, base_radius: float = 60.0,
+                 scan_whole_map: bool = True) -> None:
         super().__init__(name="supcombot-perception", daemon=True)
         self.stream = stream
         self.game = game
@@ -161,6 +165,7 @@ class Perception(threading.Thread):
         self.ctx = ctx
         self.hz = max(0.5, float(hz))
         self.base_radius = base_radius
+        self.scan_whole_map = scan_whole_map
         self.stop_event = threading.Event()
         self._lock = threading.Lock()
         self._percepts = Percepts()
@@ -230,19 +235,31 @@ class Perception(threading.Thread):
 
         enemy_colors = getattr(prof, "enemy_colors", None) or []
         if enemy_colors:
-            rx, ry, rw, rh = self.camera.world_rect_to_client(self.ctx.start[0], self.ctx.start[1], self.base_radius)
+            t0 = time.time()
+            if self.scan_whole_map:
+                rx, ry, rw, rh = self.camera.rect
+            else:
+                rx, ry, rw, rh = self.camera.world_rect_to_client(self.ctx.start[0], self.ctx.start[1], self.base_radius)
             region = crop(frame, (rx, ry, rw, rh))
             mask = np.zeros(region.shape[:2], dtype=bool)
             for c in enemy_colors:
                 mask |= vision.color_mask(region, c, tol=55)
-            n = vision.count_blobs(mask, min_pixels=2, max_blobs=200)
-            p.enemies_near_base = n
-            if n:
-                ys, xs = np.where(mask)
-                cx, cy = rx + float(xs.mean()), ry + float(ys.mean())
-                p.enemy_world = self.camera.client_to_world(int(cx), int(cy))
-                step = max(1, len(xs) // 40)
-                p.enemy_points = [(rx + int(x), ry + int(y)) for x, y in zip(xs[::step], ys[::step])]
+            blobs = vision.blob_centroids(mask, min_pixels=2, max_blobs=1500)
+            p.enemies_total = len(blobs)
+            p.enemy_points = [(rx + int(x), ry + int(y)) for x, y, _a in blobs[:400]]
+            upp = self.camera.units_per_pixel()
+            world_pts = []
+            for x, y, _a in blobs:
+                wx, wz = self.camera.client_to_world(int(rx + x), int(ry + y))
+                world_pts.append((wx, wz, 1.0))
+            clusters = vision.cluster_points(world_pts, radius=max(24.0, 12.0 * upp))
+            p.enemy_clusters = [(x, z, int(n)) for x, z, n in clusters]
+            near = [(x, z, n) for x, z, n in p.enemy_clusters
+                    if (x - self.ctx.start[0]) ** 2 + (z - self.ctx.start[1]) ** 2 <= self.base_radius ** 2]
+            p.enemies_near_base = int(sum(n for _x, _z, n in near))
+            if near:
+                p.enemy_world = (near[0][0], near[0][1])
+            p.analysis_ms = (time.time() - t0) * 1000
         return p
 
 

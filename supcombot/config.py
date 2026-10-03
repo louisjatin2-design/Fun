@@ -29,8 +29,9 @@ DEFAULT_SETTINGS: dict = {
     "window_title": "Forged Alliance",  # substring of the game window title
     "faction": "uef",
     "map": "auto",                      # "auto" = detect via map preview, otherwise map folder name
-    "start_slot": 1,                    # ARMY_<n> marker you spawn on
-    "enemy_slots": [],                  # empty = every other start position counts as enemy
+    "start_slot": 1,                    # ARMY_<n> marker you spawn on (lobby slot)
+    "enemy_slots": [],                  # lobby slots of enemies; empty = every other slot that is not an ally
+    "ally_slots": [],                   # lobby slots of allies (team games): never attacked, not counted as enemies
     # Managers (all toggleable in the overlay)
     "bot_enabled": False,
     "auto_attack": False,
@@ -50,17 +51,21 @@ DEFAULT_SETTINGS: dict = {
     # Ollama
     "ollama": {
         "url": "http://localhost:11434",
-        "model": "auto",
-        "interval": 45,
+        "model": "auto",                # auto = first installed model from `prefer`, else any
+        "prefer": ["qwen2.5:14b", "qwen2.5-coder:14b", "llama3.1:8b", "qwen2.5:7b", "mistral", "gemma2", "llama3", "phi"],
+        "interval": 20,                 # seconds between advice requests
         "language": "de",
         "timeout": 60,
+        "num_ctx": 8192,                # context window (VRAM permitting)
+        "num_gpu": 99,                  # offload all layers to the GPU
+        "num_thread": 0,                # 0 = let Ollama decide (CPU fallback)
     },
     # Global hotkeys (python 'keyboard' syntax)
     "hotkeys": {
         "toggle_bot": "ctrl+alt+b",
         "toggle_attack": "ctrl+alt+a",
         "attack_now": "ctrl+alt+x",
-        "toggle_overlay": "ctrl+alt+o",
+        "toggle_overlay": "alt+f6",
         "cycle_strategy": "ctrl+alt+s",
         "report_win": "ctrl+alt+w",
         "report_loss": "ctrl+alt+l",
@@ -79,15 +84,36 @@ DEFAULT_SETTINGS: dict = {
     "overlay": {"x": 20, "y": 120, "alpha": 0.88},
     # Live vision: continuous capture of the game window instead of on-demand screenshots
     "vision": {
-        "fps": 20,                      # capture rate of the frame stream
+        "fps": 60,                      # capture rate of the frame stream
         "backend": "auto",              # auto | dxcam | mss
-        "perception_hz": 5,             # how often the frames are analysed
+        "perception_hz": 15,            # how often the frames are analysed
+        "scan_whole_map": True,         # enemy colours on the whole map (needs colors.enemy)
         "preview": False,               # open the "Bot-Sicht" window at start
-        "preview_width": 520,
+        "preview_width": 640,
     },
+    # Hardware usage: "max" (default, e.g. 3080 + 5900X) or "low" for weak machines
+    "performance": {"profile": "max", "threads": 0},
     "debug": False,
     "dry_run": False,
 }
+
+
+LOW_PROFILE = {"vision": {"fps": 15, "perception_hz": 4, "scan_whole_map": False, "preview_width": 480},
+               "ollama": {"interval": 60, "num_ctx": 4096}}
+
+
+def apply_performance_profile(settings: dict) -> dict:
+    """Lower rates for weak machines; "max" keeps the defaults, which already target a strong PC."""
+    if settings.get("performance", {}).get("profile") == "low":
+        _merge(settings, copy.deepcopy(LOW_PROFILE))
+    return settings
+
+
+def cpu_threads(settings: dict) -> int:
+    n = int(settings.get("performance", {}).get("threads", 0) or 0)
+    if n <= 0:
+        n = max(2, (os.cpu_count() or 4) - 2)   # leave two threads for the game
+    return n
 
 
 def ensure_dirs() -> None:

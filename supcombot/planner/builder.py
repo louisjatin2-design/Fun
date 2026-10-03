@@ -42,14 +42,15 @@ def dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def make_context(info: MapInfo, start_slot: int, enemy_slots: List[int]) -> MapContext:
+def make_context(info: MapInfo, start_slot: int, enemy_slots: List[int], ally_slots: Optional[List[int]] = None) -> MapContext:
     if start_slot not in info.starts:
         raise ValueError(f"Startposition {start_slot} existiert auf {info.name} nicht (vorhanden: {sorted(info.starts)})")
     s = info.starts[start_slot]
     start = (s.x, s.z)
+    allies = set(ally_slots or [])
     enemies: List[Tuple[float, float]] = []
     for n, m in info.start_positions():
-        if n == start_slot:
+        if n == start_slot or n in allies:
             continue
         if enemy_slots and n not in enemy_slots:
             continue

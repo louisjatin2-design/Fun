@@ -6,7 +6,23 @@ from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
+try:
+    import cv2  # type: ignore
+
+    HAS_CV2 = True
+except Exception:  # pragma: no cover - optional accelerator
+    cv2 = None
+    HAS_CV2 = False
+
 Rect = Tuple[int, int, int, int]  # x, y, w, h
+
+
+def set_threads(n: int) -> None:
+    if HAS_CV2:
+        try:
+            cv2.setNumThreads(int(n))
+        except Exception:
+            pass
 
 
 def gray(img: np.ndarray) -> np.ndarray:
@@ -111,8 +127,50 @@ def color_mask(img: np.ndarray, color: Sequence[int], tol: int = 40) -> np.ndarr
     return d <= tol
 
 
+def blob_centroids(mask: np.ndarray, min_pixels: int = 3, max_blobs: int = 2000):
+    """Centroids [(x, y, area), ...] of connected components. OpenCV when available, numpy BFS otherwise."""
+    if HAS_CV2:
+        n, _labels, stats, cents = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=4)
+        out = []
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area >= min_pixels:
+                out.append((float(cents[i][0]), float(cents[i][1]), area))
+                if len(out) >= max_blobs:
+                    break
+        return out
+    return _blob_centroids_py(mask, min_pixels, max_blobs)
+
+
+def _blob_centroids_py(mask: np.ndarray, min_pixels: int, max_blobs: int):
+    h, w = mask.shape
+    seen = np.zeros_like(mask, dtype=bool)
+    out = []
+    ys, xs = np.where(mask)
+    for sy, sx in zip(ys, xs):
+        if seen[sy, sx]:
+            continue
+        q = deque([(sy, sx)])
+        seen[sy, sx] = True
+        pts = []
+        while q:
+            y, x = q.popleft()
+            pts.append((x, y))
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not seen[ny, nx]:
+                    seen[ny, nx] = True
+                    q.append((ny, nx))
+        if len(pts) >= min_pixels:
+            out.append((sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts), len(pts)))
+            if len(out) >= max_blobs:
+                break
+    return out
+
+
 def count_blobs(mask: np.ndarray, min_pixels: int = 3, max_blobs: int = 500) -> int:
-    """Connected components (4-neighbourhood) in a boolean mask. Pure python BFS: keep masks small."""
+    """Number of connected components (4-neighbourhood) with at least min_pixels."""
+    if HAS_CV2:
+        return len(blob_centroids(mask, min_pixels, max_blobs))
     h, w = mask.shape
     seen = np.zeros_like(mask, dtype=bool)
     count = 0
@@ -135,6 +193,23 @@ def count_blobs(mask: np.ndarray, min_pixels: int = 3, max_blobs: int = 500) -> 
             if count >= max_blobs:
                 break
     return count
+
+
+def cluster_points(points, radius: float):
+    """Greedy clustering of (x, y, weight) points: returns [(x, y, total_weight), ...]."""
+    clusters = []
+    for x, y, w in points:
+        for c in clusters:
+            if (c[0] - x) ** 2 + (c[1] - y) ** 2 <= radius * radius:
+                tw = c[2] + w
+                c[0] = (c[0] * c[2] + x * w) / tw
+                c[1] = (c[1] * c[2] + y * w) / tw
+                c[2] = tw
+                break
+        else:
+            clusters.append([float(x), float(y), float(w)])
+    clusters.sort(key=lambda c: -c[2])
+    return [(c[0], c[1], c[2]) for c in clusters]
 
 
 def normalized_correlation(a: np.ndarray, b: np.ndarray) -> float:

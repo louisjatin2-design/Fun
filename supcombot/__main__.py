@@ -53,20 +53,25 @@ def cmd_detect_map(settings: dict, args) -> int:
 
 
 def cmd_ollama(settings: dict, args) -> int:
-    from .ollama import OllamaAdvisor
-
-    o = settings["ollama"]
-    adv = OllamaAdvisor(o["url"], o["model"], o.get("timeout", 60), o.get("language", "de"))
+    adv = _advisor(settings)
     if not adv.check():
         print(adv.last_error)
         return 1
-    print("Modelle:", ", ".join(adv.list_models()))
+    print("Modelle:", ", ".join(adv.list_models()), "| gewaehlt:", adv.model, "| Optionen:", adv.options)
     print("Teste Anfrage mit Beispielzustand ...")
     state = {"t": 420, "phase": "expand", "strategy": "balanced", "mass": {"ratio": 0.04, "stall": True}, "energy": {"ratio": 0.7},
              "structures": {"mex": 5, "pgen": 4, "landFac": 2}, "units": {"armyEstimate": 9}}
     res = adv.ask(state, ["[06:40] Angriffswelle 1: ~12 Einheiten", "[07:00] Mass-Stall"])
     print("Antwort:", res if res else adv.last_raw[:300])
     return 0 if res else 1
+
+
+def _advisor(settings: dict):
+    from .ollama import OllamaAdvisor
+
+    o = settings["ollama"]
+    opts = {"num_ctx": o.get("num_ctx"), "num_gpu": o.get("num_gpu"), "num_thread": o.get("num_thread")}
+    return OllamaAdvisor(o["url"], o["model"], o.get("timeout", 60), o.get("language", "de"), o.get("prefer"), opts)
 
 
 def cmd_calibrate(settings: dict, args) -> int:
@@ -128,7 +133,6 @@ def cmd_layouts(settings: dict, args) -> int:
 def cmd_run(settings: dict, args) -> int:
     from .bot import Bot
     from .game import Game
-    from .ollama import OllamaAdvisor
     from .overlay import Overlay
     from .profile import Profile
     from .capture import crop
@@ -183,10 +187,11 @@ def cmd_run(settings: dict, args) -> int:
 
     advisor = None
     if settings.get("use_ollama"):
-        o = settings["ollama"]
-        advisor = OllamaAdvisor(o["url"], o["model"], o.get("timeout", 60), o.get("language", "de"))
+        advisor = _advisor(settings)
         if not advisor.check():
             log.warning("Ollama deaktiviert: %s", advisor.last_error)
+        elif not any(tag in advisor.model for tag in ("14b", "13b", "32b", "70b")):
+            log.info("Tipp fuer RTX 3080: `ollama pull qwen2.5:14b` liefert deutlich bessere Ratschlaege (passt in 10 GB VRAM).")
 
     bot = Bot(settings, game, chosen, advisor)
     bot.start()
@@ -228,10 +233,13 @@ def main(argv=None) -> int:
     p_lay.add_argument("--clear", action="store_true")
     args = parser.parse_args(argv)
 
-    settings = config.load_settings()
+    settings = config.apply_performance_profile(config.load_settings())
     if args.debug:
         settings["debug"] = True
     logmod.setup(settings.get("debug", False))
+    from . import vision
+
+    vision.set_threads(config.cpu_threads(settings))
     cmd = args.cmd or "run"
     if cmd == "run" and not hasattr(args, "map"):
         args = parser.parse_args(["run"] + (["--debug"] if args.debug else []))

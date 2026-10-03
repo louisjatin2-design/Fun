@@ -40,3 +40,15 @@ def test_parse_advice():
     assert adv["attackThreshold"] == 120
     assert abs(adv["armyMix"]["tank"] - 0.75) < 1e-6
     assert parse_advice("kein json") is None
+
+
+def test_blob_centroids_and_clusters():
+    mask = np.zeros((30, 30), dtype=bool)
+    mask[2:5, 2:5] = True
+    mask[3:6, 8:11] = True
+    mask[20:23, 20:23] = True
+    cents = vision.blob_centroids(mask, min_pixels=3)
+    assert len(cents) == 3
+    clusters = vision.cluster_points(cents, radius=8)
+    assert len(clusters) == 2
+    assert clusters[0][2] == 18  # the two close blobs merged (9 + 9 pixels)

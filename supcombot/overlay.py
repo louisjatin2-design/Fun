@@ -98,6 +98,16 @@ class Overlay:
             b.grid(row=row + i // 2, column=i % 2, padx=3, pady=2, sticky="ew")
             if label == "Verteidigung":
                 self.buttons["auto_defense"] = b
+        # Lobby slots (multiplayer): click cycles Ich -> Gegner -> Verbuendet -> leer.
+        slots = tk.Frame(self.root, bg=bg, padx=8, pady=2)
+        slots.pack(fill="x")
+        tk.Label(slots, text="Lobby-Slots:", bg=bg, fg="#9fb0c8", font=("Segoe UI", 8)).grid(row=0, column=0, sticky="w")
+        self.slot_buttons: Dict[int, tk.Button] = {}
+        for i, n in enumerate(sorted(self.bot.map.starts)):
+            b = tk.Button(slots, text=str(n), width=7, bd=0, font=("Segoe UI", 8), command=lambda k=n: self.cycle_slot(k))
+            b.grid(row=1 + i // 6, column=i % 6, padx=2, pady=1)
+            self.slot_buttons[n] = b
+        self._refresh_slots()
         hk = self.settings.get("hotkeys", {})
         hint = f"Hotkeys: Bot {hk.get('toggle_bot')} | Angriff {hk.get('toggle_attack')} | Jetzt {hk.get('attack_now')} | Overlay {hk.get('toggle_overlay')}"
         tk.Label(self.root, text=hint, bg=bg, fg="#7f8fa8", font=("Segoe UI", 8), wraplength=330, justify="left").pack(fill="x", padx=8, pady=(0, 6))
@@ -145,19 +155,66 @@ class Overlay:
         config.save_settings(self.settings)
         self._refresh_buttons()
 
+    def _slot_role(self, n: int) -> str:
+        if n == int(self.settings.get("start_slot", 1)):
+            return "me"
+        if n in self.settings.get("ally_slots", []):
+            return "ally"
+        enemies = self.settings.get("enemy_slots", [])
+        if n in enemies or not enemies:
+            return "enemy"
+        return "empty"
+
+    def _refresh_slots(self) -> None:
+        labels = {"me": ("Ich", "#2e7d32"), "ally": ("Ally", "#1f5f8b"), "enemy": ("Gegner", "#6b2b2b"), "empty": ("leer", "#333a4a")}
+        for n, b in self.slot_buttons.items():
+            text, color = labels[self._slot_role(n)]
+            b.configure(text=f"{n}: {text}", bg=color, fg="#e6edf7")
+
+    def cycle_slot(self, n: int) -> None:
+        """Ich -> Gegner -> Verbuendet -> leer -> Ich. Explicit enemy lists replace the 'everyone else' default."""
+        role = self._slot_role(n)
+        all_slots = sorted(self.bot.map.starts)
+        enemies = set(self.settings.get("enemy_slots", []) or [k for k in all_slots if k != int(self.settings.get("start_slot", 1))
+                                                                   and k not in self.settings.get("ally_slots", [])])
+        allies = set(self.settings.get("ally_slots", []))
+        start = int(self.settings.get("start_slot", 1))
+        if role == "me":
+            return  # choose a different slot as "me" by cycling that slot to Ich
+        enemies.discard(n)
+        allies.discard(n)
+        if role == "enemy":
+            allies.add(n)
+        elif role == "ally":
+            pass  # becomes empty
+        elif role == "empty":
+            enemies.discard(start)
+            start = n
+        enemies.discard(start)
+        allies.discard(start)
+        self.settings["ally_slots"] = sorted(allies)
+        self.settings["enemy_slots"] = sorted(enemies)
+        self.settings["start_slot"] = start
+        config.save_settings(self.settings)
+        try:
+            self.bot.set_slots(start, sorted(enemies), sorted(allies))
+        except ValueError as exc:
+            log.error("%s", exc)
+        self._refresh_slots()
+
     def next_start(self) -> None:
         slots = sorted(self.bot.map.starts)
         cur = int(self.settings.get("start_slot", 1))
         nxt = slots[(slots.index(cur) + 1) % len(slots)] if cur in slots else slots[0]
+        enemies = [k for k in self.settings.get("enemy_slots", []) if k != nxt]
+        allies = [k for k in self.settings.get("ally_slots", []) if k != nxt]
         self.settings["start_slot"] = nxt
         config.save_settings(self.settings)
         try:
-            from .planner.builder import make_context
-
-            self.bot.ctx = make_context(self.bot.map, nxt, list(self.settings.get("enemy_slots", [])))
-            self.bot.request("new_game")
+            self.bot.set_slots(nxt, enemies, allies)
         except ValueError as exc:
             log.error("%s", exc)
+        self._refresh_slots()
 
     def clear_layouts(self) -> None:
         n = layouts.clear_all()
@@ -228,7 +285,10 @@ class Overlay:
         adv = st.get("advice") or "-"
         self.vars["ollama"].set(f"Ollama: {st.get('ollama', '-')}   Rat: {adv}")
         valid = "ja" if st.get("map_view_valid") else "nein"
-        self.vars["vision"].set(f"Live-Sicht: {st.get('vision_fps', 0)} fps ({st.get('vision_backend', '-')})   Kartenansicht: {valid}   Gegner nahe Basis: {st.get('enemies_near_base', 0)}")
+        self.vars["vision"].set(f"Live-Sicht: {st.get('vision_fps', 0)} fps ({st.get('vision_backend', '-')}, {st.get('analysis_ms', 0)} ms)   Karte: {valid}   "
+                                f"Gegner gesehen {st.get('enemies_total', 0)} / in Basis {st.get('enemies_near_base', 0)}   Slots: {st.get('enemies', 0)} Gegner, {st.get('allies', 0)} Ally")
+        if hasattr(self, "slot_buttons"):
+            self._refresh_slots()
         self._refresh_buttons()
         self.root.after(500, self._poll)
 

@@ -103,3 +103,20 @@ def test_layout_memory_roundtrip(tmp_path, monkeypatch):
     layouts.store_result("map", "1_2", False, [])
     layouts.store_result("map", "1_2", False, [])
     assert layouts.load("map", "1_2") is None  # forgotten after two losses
+
+
+def test_allies_are_not_enemies(tmp_path):
+    info = make_map(tmp_path)
+    ctx = make_context(info, 1, [], ally_slots=[2])
+    assert ctx.enemies == []
+    assert attack.pick_target(BotState(), ctx, ctx.rally) is None
+
+
+def test_seen_clusters_are_preferred(tmp_path):
+    ctx = ctx_for(tmp_path)
+    s = BotState()
+    clusters = [(300.0, 150.0, 5), (ctx.start[0] + 5, ctx.start[1] + 5, 9)]  # second one is inside our base
+    assert attack.pick_target(s, ctx, ctx.rally, clusters, 60.0) == (300.0, 150.0)
+    s.aggression = 3
+    clusters.append((420.0, 180.0, 12))
+    assert attack.pick_target(s, ctx, ctx.rally, clusters, 60.0) == (420.0, 180.0)

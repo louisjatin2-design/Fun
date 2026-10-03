@@ -36,7 +36,8 @@ class Bot(threading.Thread):
         self.camera = Camera(game, map_info)
         self.eco = Economy(game.profile, settings)
         self.state = BotState()
-        self.ctx: MapContext = make_context(map_info, int(settings.get("start_slot", 1)), list(settings.get("enemy_slots", [])))
+        self.ctx: MapContext = make_context(map_info, int(settings.get("start_slot", 1)), list(settings.get("enemy_slots", [])),
+                                            list(settings.get("ally_slots", [])))
         self.layout: Optional[dict] = None
         self.layout_used: set = set()
         self.stop_event = threading.Event()
@@ -51,7 +52,8 @@ class Bot(threading.Thread):
         vis = settings.get("vision", {})
         self.stream = FrameStream(game, fps=vis.get("fps", 20), backend=vis.get("backend", "auto"))
         game.stream = self.stream
-        self.perception = Perception(self.stream, game, self.camera, self.ctx, hz=vis.get("perception_hz", 5), base_radius=self.base_radius)
+        self.perception = Perception(self.stream, game, self.camera, self.ctx, hz=vis.get("perception_hz", 5),
+                                     base_radius=self.base_radius, scan_whole_map=bool(vis.get("scan_whole_map", True)))
         self.new_game()
 
     # ------------------------------------------------------------------ lifecycle
@@ -184,7 +186,20 @@ class Bot(threading.Thread):
             "vision_backend": self.stream.backend,
             "map_view_valid": self.percepts().map_view_valid,
             "enemies_near_base": self.percepts().enemies_near_base,
+            "enemies_total": self.percepts().enemies_total,
+            "analysis_ms": round(self.percepts().analysis_ms, 1),
+            "allies": len(self.settings.get("ally_slots", [])),
+            "enemies": len(self.ctx.enemies),
         })
+
+    def set_slots(self, start_slot: int, enemy_slots, ally_slots) -> None:
+        """Re-create the map context after the slot assignment changed (multiplayer lobbies)."""
+        self.settings["start_slot"] = int(start_slot)
+        self.settings["enemy_slots"] = list(enemy_slots)
+        self.settings["ally_slots"] = list(ally_slots)
+        self.ctx = make_context(self.map, int(start_slot), list(enemy_slots), list(ally_slots))
+        self.perception.ctx = self.ctx
+        self.request("new_game")
 
     def percepts(self) -> Percepts:
         return self.perception.percepts()
@@ -511,7 +526,9 @@ class Bot(threading.Thread):
     # ------------------------------------------------------------------ attacks
     def launch_wave(self, reason: str) -> None:
         s = self.state
-        target = attack_plan.pick_target(s, self.ctx, self.ctx.rally)
+        p = self.percepts()
+        clusters = p.enemy_clusters if (time.time() - p.ts < 1.5 and p.map_view_valid) else None
+        target = attack_plan.pick_target(s, self.ctx, self.ctx.rally, clusters, self.base_radius)
         if target is None:
             s.event("Kein Angriffsziel (keine Gegnerposition bekannt)")
             return
