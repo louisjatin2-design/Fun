@@ -223,6 +223,8 @@ class Bot(threading.Thread):
             "factory_upgrades": s.factory_upgrades,
             "strategy_auto": self.auto_strategy,
             "debrief": s.debrief,
+            "faction": s.faction_detected or self.game.profile.faction,
+            "factory_tech": max([f.tech for f in s.factories()] or [1]),
             "events": list(s.events[-int(self.settings.get("overlay", {}).get("log_lines", 5)):]),
         })
 
@@ -397,12 +399,43 @@ class Bot(threading.Thread):
             threading.Thread(target=worker, name="debrief", daemon=True).start()
 
     # ------------------------------------------------------------------ opening
+    def detect_faction(self) -> Optional[str]:
+        """With faction "auto": compare the build menu on screen with every calibrated faction profile."""
+        from .profile import Profile
+
+        frame = self.game.screenshot()
+        best, best_score = None, 0.0
+        for faction, prof in Profile.available(self.game.profile.resolution):
+            scores = []
+            for key in ("ui.build.mex", "ui.build.landFac", "ui.build.pgen"):
+                patch = prof.patch(key)
+                if patch is not None and prof.has(key):
+                    x, y = prof.point(key)
+                    scores.append(vision.match_template_at(frame, patch, x, y, search=2))
+            if scores:
+                score = sum(scores) / len(scores)
+                if score > best_score:
+                    best, best_score = (faction, prof), score
+        if best and best_score >= 0.7:
+            faction, prof = best
+            if faction != self.game.profile.faction:
+                prof.map_rects.update({k: v for k, v in self.game.profile.map_rects.items() if k not in prof.map_rects})
+                self.game.profile = prof
+                self.eco = Economy(prof, self.settings)
+            self.state.event(f"Fraktion erkannt: {faction} ({best_score:.2f})")
+            return faction
+        return None
+
     def do_opening(self) -> None:
         s = self.state
         g = self.game
         if not g.ui_visible("ui.build.mex"):
             self.select_acu()
             g.wait(0.4)
+            if self.settings.get("faction") == "auto" and not s.faction_detected:
+                detected = self.detect_faction()
+                if detected:
+                    s.faction_detected = detected
             if not g.ui_visible("ui.build.mex"):
                 g.deselect()
                 s.event("ACU nicht auswaehlbar - bitte ACU manuell anklicken")
@@ -424,8 +457,17 @@ class Bot(threading.Thread):
         key = "ui.build." + wish.role
         if not self.game.profile.has(key):
             return False
-        if wish.role in ("pgen2", "pd2", "aa2", "shield2") and self.game.profile.has("ui.build.tab_t2"):
-            self.game.click_ui("ui.build.tab_t2")
+        tier = production.role_tier(wish.role) if wish.role not in ("mex", "hydro") else 1
+        tab = {2: "ui.build.tab_t2", 3: "ui.build.tab_t3"}.get(tier)
+        if tab:
+            if not self.game.profile.has(tab):
+                return False
+            self.game.click_ui(tab)
+            if not self.game.ui_visible(key):
+                # This engineer cannot build that tier: back to T1 and give up on this wish for now.
+                if self.game.profile.has("ui.build.tab_t1"):
+                    self.game.click_ui("ui.build.tab_t1")
+                return False
         self.game.click_ui(key)
         if self.settings.get("input", {}).get("placement_check", True) and wish.role not in ("mex", "hydro") and not self.game.dry_run:
             checked = self.validate_spot(wish, pos)
@@ -504,25 +546,37 @@ class Bot(threading.Thread):
         return done
 
     def handle_factory_upgrade(self) -> None:
-        """Upgrade the first land factory to a T2 HQ when the economy allows (needs ui.factory.upgrade)."""
+        """Upgrade land factories: first one T1->T2->T3, the others to T2 when mass floats (vanilla: each factory upgrades itself)."""
         s, g = self.state, self.game
-        if not g.profile.has("ui.factory.upgrade") or s.factory_upgrades > 0:
+        now = time.time()
+        if now - self.last_factory_upgrade_check < 60:
             return
-        if time.time() - self.last_factory_upgrade_check < 60 or not Economy.can_upgrade_factory(s):
-            return
-        self.last_factory_upgrade_check = time.time()
-        facs = [f for f in s.factories("land") if time.time() - f.ordered_at > 120]
+        self.last_factory_upgrade_check = now
+        facs = [f for f in s.factories("land") if now - f.ordered_at > 120 and f.upgrading_until < now]
         if not facs:
             return
-        fac = facs[0]
-        self.camera.click_world(fac.x, fac.z)
+        if any(f.upgrading_until > now for f in s.factories("land")):
+            return
+        candidate, key, new_tech = None, None, 0
+        t2 = [f for f in facs if f.tech == 2]
+        t1 = [f for f in facs if f.tech == 1]
+        if t2 and g.profile.has("ui.factory.upgrade3") and Economy.can_upgrade_factory_t3(s) and not any(f.tech >= 3 for f in s.factories("land")):
+            candidate, key, new_tech = t2[0], "ui.factory.upgrade3", 3
+        elif t1 and g.profile.has("ui.factory.upgrade") and Economy.can_upgrade_factory(s):
+            has_t2_already = any(f.tech >= 2 for f in s.factories("land"))
+            if not has_t2_already or (s.mass_float and len(facs) >= 2):
+                candidate, key, new_tech = t1[0], "ui.factory.upgrade", 2
+        if candidate is None:
+            return
+        self.camera.click_world(candidate.x, candidate.z)
         g.wait(0.35)
-        if g.ui_visible("ui.factory.upgrade"):
-            g.click_ui("ui.factory.upgrade")
-            fac.tech = 2
-            fac.upgrading_until = time.time() + 240
+        if g.ui_visible(key):
+            g.click_ui(key)
+            candidate.tech = new_tech
+            candidate.upgrading_until = now + (300 if new_tech == 3 else 200)
+            candidate.repeat_set = False
             s.factory_upgrades += 1
-            s.event("Fabrik-Upgrade auf T2 gestartet")
+            s.event(f"Fabrik-Upgrade auf T{new_tech} gestartet")
         g.deselect()
 
     # ------------------------------------------------------------------ engineers
@@ -550,8 +604,10 @@ class Bot(threading.Thread):
 
     def assign_jobs(self, max_orders: int = 3) -> bool:
         s = self.state
-        has_t2 = self.game.profile.has("ui.build.tab_t2") and s.game_time() > 900
-        wishes = wishlist(s, self.ctx, self.settings, has_t2)
+        prof = self.game.profile
+        has_t2 = prof.has("ui.build.tab_t2") and s.game_time() > 900 and s.engineer_tier_seen >= 2
+        has_t3 = prof.has("ui.build.tab_t3") and prof.has("ui.build.pgen3") and s.engineer_tier_seen >= 3
+        wishes = wishlist(s, self.ctx, self.settings, has_t2, has_t3)
         budget = Economy.build_budget(s)
         now = time.time()
         in_progress = sum(1 for st in s.structures if now - st.ordered_at < 120 and st.role not in ("mex",))
@@ -636,15 +692,31 @@ class Bot(threading.Thread):
             return
         tech = fac.tech if fac else 1
         if kind == "land":
-            avail = [r for r in LAND_ROLES + ("eng2", "tank2", "maa2") if g.profile.has(f"ui.factory.land.{r}")]
-            roles = production.tier_roles(production.land_queue(s, self.settings, [r for r in avail if not r.endswith("2")], n), tech, avail)
-            if tech >= 2 and g.profile.has("ui.factory.tab_t2") and any(r.endswith("2") for r in roles):
-                g.click_ui("ui.factory.tab_t2")
+            avail = [r for r in LAND_ROLES + ("eng2", "tank2", "maa2", "eng3", "tank3", "arty3") if g.profile.has(f"ui.factory.land.{r}")]
+            base = [r for r in avail if production.role_tier(r) == 1]
+            roles = production.tier_roles(production.land_queue(s, self.settings, base, n), tech, avail)
         else:
-            avail = [r for r in AIR_ROLES if g.profile.has(f"ui.factory.air.{r}")]
-            roles = production.air_queue(s, avail, n)
-        for r in roles:
+            avail = [r for r in AIR_ROLES + ("inter3", "bomber3") if g.profile.has(f"ui.factory.air.{r}")]
+            roles = production.tier_roles(production.air_queue(s, [r for r in avail if production.role_tier(r) == 1], n), tech, avail)
+        # Group by tier so each tab is clicked once; a tier whose tab is missing falls back to T1.
+        tabs = {2: "ui.factory.tab_t2", 3: "ui.factory.tab_t3"}
+        ordered = sorted(roles, key=production.role_tier)
+        current_tab = 1
+        for r in ordered:
+            tier = production.role_tier(r)
+            if tier != current_tab:
+                tab = tabs.get(tier)
+                if tab and g.profile.has(tab):
+                    g.click_ui(tab)
+                    current_tab = tier
+                else:
+                    r = r.rstrip("23")
+                    if current_tab != 1:
+                        continue
             g.click_ui(f"ui.factory.{kind}.{r}")
+            if r.startswith("eng"):
+                s.engineer_tier_seen = max(s.engineer_tier_seen, production.role_tier(r))
+        roles = ordered
         if fac:
             fac.queued_units += len(roles)
             fac.last_queue_at = time.time()
@@ -677,16 +749,22 @@ class Bot(threading.Thread):
         now = time.time()
         mexes = [m for m in s.structures if m.role == "mex" and m.tech == 1 and now - m.ordered_at > 120]
         mexes.sort(key=lambda m: dist(m.pos(), self.ctx.start))
+        key, new_tech = "ui.upgrade", 2
+        t2_mexes = [m for m in s.structures if m.role == "mex" and m.tech == 2 and now - m.ordered_at > 420]
+        t2_mexes.sort(key=lambda m: dist(m.pos(), self.ctx.start))
+        if (not mexes or s.count("mex") - len(mexes) >= 6) and t2_mexes and g.profile.has("ui.upgrade3") and Economy.can_upgrade_mex_t3(s):
+            mexes, key, new_tech = t2_mexes, "ui.upgrade3", 3
         if not mexes:
             return
         m = mexes[0]
         self.camera.click_world(m.x, m.z)
         g.wait(0.35)
-        if g.ui_visible("ui.upgrade"):
-            g.click_ui("ui.upgrade")
-            m.tech = 2
+        if g.ui_visible(key):
+            g.click_ui(key)
+            m.tech = new_tech
+            m.ordered_at = now
             s.last_upgrade_at = now
-            s.event(f"Mex-Upgrade bei ({int(m.x)},{int(m.z)})")
+            s.event(f"Mex-Upgrade auf T{new_tech} bei ({int(m.x)},{int(m.z)})")
         else:
             m.ordered_at = now  # probably not built yet; look again later
         g.deselect()

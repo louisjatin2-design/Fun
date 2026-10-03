@@ -108,3 +108,54 @@ def test_best_strategy_from_history(tmp_path, monkeypatch):
     layouts.store_result("m", "1_1", True, [], {"strategy": "rush"})
     layouts.store_result("m", "1_1", False, [], {"strategy": "eco"})
     assert layouts.best_strategy("m", "1_1") == "rush"
+
+
+def test_tier_roles_t3_and_role_tier():
+    assert production.tier_roles(["eng", "tank", "arty"], 3, ["eng2", "tank3", "arty3"]) == ["eng2", "tank3", "arty3"]
+    assert production.role_tier("tank3") == 3 and production.role_tier("eng2") == 2 and production.role_tier("maa") == 1
+
+
+def test_t3_economy_gates():
+    s = BotState()
+    s.started_at -= 1500
+    s.mass_ratio, s.energy_ratio = 0.8, 0.7
+    for i in range(10):
+        s.add_structure("mex", i * 10, 0)
+    assert Economy.can_upgrade_factory_t3(s)
+    assert Economy.can_upgrade_mex_t3(s)
+    s.energy_stall = True
+    assert not Economy.can_upgrade_factory_t3(s)
+
+
+def test_wishlist_uses_t3_generator(tmp_path):
+    from supcombot.planner.builder import wishlist
+
+    info = make_map(tmp_path)
+    ctx = make_context(info, 1, [])
+    s = BotState()
+    s.started_at -= 1500
+    s.mass_ratio = 0.7
+    s.energy_stall = True
+    s.energy_history = [0.5, 0.3, 0.05]
+    roles = [w.role for w in wishlist(s, ctx, {}, has_t2_items=True, has_t3_items=True)]
+    assert roles[0] == "pgen3"
+    s.energy_stall = False
+    s.energy_low = True
+    roles = [w.role for w in wishlist(s, ctx, {}, has_t2_items=True, has_t3_items=True)]
+    assert "pgen3" in roles
+
+
+def test_profile_copy_and_recapture():
+    from supcombot.profile import Profile
+
+    src = Profile("uef", (800, 600))
+    src.set_point("ui.build.mex", 100, 500, np.zeros((24, 24, 3), dtype=np.uint8))
+    src.set_point("ui.eco.mass_left", 10, 5)
+    src.team_color = [1, 2, 3]
+    dst = Profile("aeon", (800, 600))
+    keys = dst.copy_from(src)
+    assert keys == ["ui.build.mex"]
+    assert dst.point("ui.eco.mass_left") == (10, 5) and dst.team_color == [1, 2, 3]
+    img = np.full((600, 800, 3), 77, dtype=np.uint8)
+    assert dst.recapture(img, keys) == 1
+    assert int(dst.patch("ui.build.mex")[0, 0, 0]) == 77

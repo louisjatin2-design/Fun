@@ -82,6 +82,8 @@ class BotState:
     last_acu_action: float = 0.0
     strategy_auto: Optional[str] = None
     debrief: str = ""
+    engineer_tier_seen: int = 1        # highest engineer tier the bot has queued (gates T2/T3 build items)
+    faction_detected: Optional[str] = None
 
     # ------------------------------------------------------------------ helpers
     def game_time(self) -> float:
@@ -128,8 +130,12 @@ class BotState:
             "mass": {"ratio": round(self.mass_ratio, 2), "stall": self.mass_stall, "float": self.mass_float},
             "energy": {"ratio": round(self.energy_ratio, 2), "stall": self.energy_stall, "low": self.energy_low},
             "structures": {
-                "mex": self.count("mex"), "pgen": self.count("pgen") + self.count("pgen2"), "landFac": self.count("landFac"),
-                "airFac": self.count("airFac"), "pd": self.count("pd") + self.count("pd2"), "aa": self.count("aa") + self.count("aa2"),
+                "mex": self.count("mex"), "mexT2": sum(1 for s in self.structures if s.role == "mex" and s.tech == 2),
+                "mexT3": sum(1 for s in self.structures if s.role == "mex" and s.tech == 3),
+                "pgen": self.count("pgen") + self.count("pgen2") + self.count("pgen3"), "landFac": self.count("landFac"),
+                "factoryTech": max([f.tech for f in self.factories()] or [1]),
+                "airFac": self.count("airFac"), "pd": self.count("pd") + self.count("pd2") + self.count("pd3"),
+                "aa": self.count("aa") + self.count("aa2") + self.count("aa3"),
                 "radar": self.count("radar"), "storage": self.count("massStorage"), "hydro": self.count("hydro"),
             },
             "units": {"engineersOrdered": self.engineers_ordered, "armyOrdered": self.army_ordered, "airOrdered": self.air_ordered,

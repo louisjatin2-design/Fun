@@ -76,3 +76,17 @@ class Economy:
         if t < min_t or state.mass_stall or state.energy_stall:
             return False
         return state.mass_ratio > 0.5 and state.energy_ratio > 0.5 and state.count("mex") >= 6
+
+    @staticmethod
+    def can_upgrade_factory_t3(state: BotState) -> bool:
+        t = state.game_time()
+        min_t = {"rush": 1500, "balanced": 1080, "eco": 900, "turtle": 1200}.get(state.strategy, 1080)
+        if t < min_t or state.mass_stall or state.energy_stall:
+            return False
+        return state.mass_ratio > 0.6 and state.energy_ratio > 0.5 and state.count("mex") >= 9
+
+    @staticmethod
+    def can_upgrade_mex_t3(state: BotState) -> bool:
+        if state.mass_stall or state.energy_stall or state.game_time() < 900:
+            return False
+        return state.mass_ratio > 0.6 and state.energy_ratio > 0.55 and state.count("mex") >= 8

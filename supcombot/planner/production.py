@@ -66,28 +66,37 @@ def pick_role(state: BotState, mix: Dict[str, float], available: List[str]) -> s
 
 def air_queue(state: BotState, available: List[str], count: int) -> List[str]:
     out: List[str] = []
+    base = [r for r in available if not r.endswith("3")]
     for _ in range(count):
-        if state.air_ordered == 0 and "scout" in available:
+        if state.air_ordered == 0 and "scout" in base:
             out.append("scout")
-        elif state.focus == "air" and "bomber" in available and state.air_ordered % 3 == 2:
+        elif state.focus == "air" and "bomber" in base and state.air_ordered % 3 == 2:
             out.append("bomber")
-        elif "inter" in available:
+        elif "inter" in base:
             out.append("inter")
-        elif available:
-            out.append(available[0])
+        elif base:
+            out.append(base[0])
         state.air_ordered += 1
     return out
 
 
 def tier_roles(roles: List[str], tech: int, available: List[str]) -> List[str]:
-    """Map T1 roles to their T2 variants when the factory is upgraded and the T2 buttons are calibrated."""
+    """Map T1 roles to the highest calibrated variant the factory can build (T3 > T2 > T1)."""
     if tech < 2:
         return roles
     out = []
     for r in roles:
-        t2 = r + "2"
-        out.append(t2 if t2 in available else r)
+        chosen = r
+        for t in range(min(tech, 3), 1, -1):
+            if f"{r}{t}" in available:
+                chosen = f"{r}{t}"
+                break
+        out.append(chosen)
     return out
+
+
+def role_tier(role: str) -> int:
+    return 3 if role.endswith("3") else 2 if role.endswith("2") else 1
 
 
 def wants_home_guard(state: BotState) -> bool:

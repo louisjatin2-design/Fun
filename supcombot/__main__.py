@@ -81,7 +81,10 @@ def cmd_calibrate(settings: dict, args) -> int:
     if args.template:
         capture_template(settings, faction, args.template)
         return 0
-    run_wizard(settings, faction, only=args.only, map_rect_only=args.map_rect)
+    if faction == "auto":
+        print("Bitte Fraktion angeben: --faction uef|aeon|cybran|seraphim")
+        return 1
+    run_wizard(settings, faction, only=args.only, map_rect_only=args.map_rect, copy_from=args.copy_from)
     return 0
 
 
@@ -161,9 +164,11 @@ def cmd_doctor(settings: dict, args) -> int:
     else:
         print(f"{warn}Spielfenster nicht gefunden (Titel enthaelt '{settings.get('window_title')}'?). Spiel starten.")
         res = (1920, 1080)
-    prof = Profile.load(settings["faction"], res)
+    avail = Profile.available(res)
+    print(f"{ok if avail else warn}Kalibrierte Fraktionen fuer {res[0]}x{res[1]}: {', '.join(f for f, _p in avail) or 'keine'}  (faction={settings['faction']})")
+    prof = avail[0][1] if settings["faction"] == "auto" and avail else Profile.load(settings["faction"] if settings["faction"] != "auto" else "uef", res)
     missing = prof.missing_required()
-    print(f"{ok if not missing else warn}Profil {settings['faction']} {res[0]}x{res[1]}: " + ("vollstaendig" if not missing else "fehlend: " + ", ".join(missing)))
+    print(f"{ok if not missing else warn}Profil {prof.faction} {res[0]}x{res[1]}: " + ("vollstaendig" if not missing else "fehlend: " + ", ".join(missing)))
     optional = [k for k, _i, _p, req in __import__('supcombot.profile', fromlist=['CALIBRATION_STEPS']).CALIBRATION_STEPS if not req and not prof.has(k) and not k.startswith("colors.")]
     if optional:
         print(f"       optional nicht kalibriert: {', '.join(optional)}")
@@ -227,10 +232,18 @@ def cmd_run(settings: dict, args) -> int:
             break
         time.sleep(1.5)
     res = game.client_size if game.hwnd else (1920, 1080)
-    game.profile = Profile.load(settings["faction"], res)
+    if settings.get("faction") == "auto":
+        avail = Profile.available(res)
+        if not avail:
+            print(f"faction=auto, aber kein kalibriertes Profil fuer {res[0]}x{res[1]}. Zuerst: python -m supcombot calibrate --faction <fraktion>")
+            return 1
+        game.profile = avail[0][1]
+        print("Fraktion wird zu Spielbeginn erkannt. Verfuegbare Profile:", ", ".join(f for f, _p in avail))
+    else:
+        game.profile = Profile.load(settings["faction"], res)
     missing = game.profile.missing_required()
     if missing and not args.force:
-        print(f"Profil {settings['faction']} {res[0]}x{res[1]} ist nicht kalibriert. Fehlend: {', '.join(missing)}")
+        print(f"Profil {game.profile.faction} {res[0]}x{res[1]} ist nicht kalibriert. Fehlend: {', '.join(missing)}")
         print("Bitte zuerst: python -m supcombot calibrate")
         return 1
 
@@ -297,6 +310,7 @@ def main(argv=None) -> int:
     p_cal.add_argument("--only", nargs="*", help="nur diese Schluessel neu kalibrieren")
     p_cal.add_argument("--map-rect", action="store_true", help="nur das Kartenrechteck")
     p_cal.add_argument("--template", choices=["victory", "defeat"], help="Sieg-/Niederlage-Dialog als Vorlage aufnehmen")
+    p_cal.add_argument("--copy-from", choices=config.FACTIONS, help="Profil einer anderen Fraktion uebernehmen und nur Button-Bilder neu aufnehmen")
     sub.add_parser("maps", help="gefundene Karten auflisten")
     sub.add_parser("detect-map", help="aktuelle Karte per Screenshot erkennen")
     sub.add_parser("ollama-test", help="Ollama-Verbindung testen")
