@@ -31,6 +31,7 @@ class Game:
         self.rect: Tuple[int, int, int, int] = (0, 0, profile.resolution[0], profile.resolution[1])
         self._last_shot: Optional[np.ndarray] = None
         self._last_shot_time = 0.0
+        self.stream = None  # FrameStream, attached by the bot
         self._debug_counter = 0
 
     # ------------------------------------------------------------------ window
@@ -74,8 +75,17 @@ class Game:
 
     # ------------------------------------------------------------------ capture
     def screenshot(self, max_age: float = 0.0) -> np.ndarray:
+        """Latest frame. With the live stream attached this never blocks on a capture of its own."""
         if max_age > 0 and self._last_shot is not None and time.time() - self._last_shot_time < max_age:
             return self._last_shot
+        stream = getattr(self, "stream", None)
+        if stream is not None and stream.is_alive():
+            frame, ts = stream.latest(max_age=0.15)
+            if frame is None:
+                frame, ts = stream.wait_new(0.4)
+            if frame is not None:
+                self._last_shot, self._last_shot_time = frame, ts
+                return frame
         if not self.capture or not self.hwnd:
             img = np.zeros((self.rect[3], self.rect[2], 3), dtype=np.uint8)
         else:

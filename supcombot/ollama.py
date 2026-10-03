@@ -32,11 +32,18 @@ SYSTEM_PROMPT_EN = SYSTEM_PROMPT_DE  # The model answers JSON either way; German
 
 
 class OllamaAdvisor:
-    def __init__(self, url: str, model: str = "auto", timeout: int = 60, language: str = "de") -> None:
+    def __init__(self, url: str, model: str = "auto", timeout: int = 60, language: str = "de",
+                 prefer: Optional[List[str]] = None, options: Optional[dict] = None) -> None:
         self.url = url.rstrip("/")
         self.model = model
         self.timeout = timeout
         self.language = language
+        self.prefer = prefer or ["llama3", "qwen", "mistral", "gemma", "phi"]
+        self.options = {"temperature": 0.3}
+        for k in ("num_ctx", "num_gpu", "num_thread"):
+            v = (options or {}).get(k)
+            if isinstance(v, int) and v > 0:
+                self.options[k] = v
         self.available: Optional[bool] = None
         self.last_error = ""
         self.last_advice: Optional[dict] = None
@@ -64,8 +71,13 @@ class OllamaAdvisor:
             log.warning(self.last_error)
             return False
         if self.model == "auto" or self.model not in models:
-            preferred = [m for m in models if any(k in m for k in ("llama3", "qwen", "mistral", "gemma", "phi"))]
-            chosen = (preferred or models)[0]
+            chosen = None
+            for pref in self.prefer:           # ordered: biggest/best first (see settings ollama.prefer)
+                hits = [m for m in models if m == pref or m.startswith(pref) or pref in m]
+                if hits:
+                    chosen = hits[0]
+                    break
+            chosen = chosen or models[0]
             if self.model != "auto":
                 log.warning("Modell %s nicht gefunden, nutze %s", self.model, chosen)
             self.model = chosen
@@ -78,12 +90,12 @@ class OllamaAdvisor:
         if self.available is False:
             return None
         prompt = SYSTEM_PROMPT_DE if self.language == "de" else SYSTEM_PROMPT_EN
-        user = "ZUSTAND:\n" + json.dumps(state, ensure_ascii=False) + "\nEREIGNISSE:\n" + "\n".join(events[-12:] or ["-"])
+        user = "ZUSTAND:\n" + json.dumps(state, ensure_ascii=False) + "\nEREIGNISSE:\n" + "\n".join(events[-25:] or ["-"])
         body = {
             "model": self.model,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.3},
+            "options": self.options,
             "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": user}],
         }
         req = urllib.request.Request(self.url + "/api/chat", data=json.dumps(body).encode("utf-8"),

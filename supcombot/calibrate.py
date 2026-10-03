@@ -77,11 +77,16 @@ def run_wizard(settings: dict, faction: str, only: Optional[List[str]] = None, m
             sx, sy = win.cursor_pos()
             cx, cy = game.to_client(sx, sy)
             img = game.screenshot()
-            if key == "colors.team":
+            if key in ("colors.team", "colors.enemy"):
                 region = img[max(0, cy - 1):cy + 2, max(0, cx - 1):cx + 2].reshape(-1, 3)
                 color = [int(v) for v in region.mean(axis=0)]
-                prof.team_color = color
-                print(f"  Teamfarbe RGB={color}")
+                if key == "colors.team":
+                    prof.team_color = color
+                    print(f"  Teamfarbe RGB={color}")
+                else:
+                    if color not in prof.enemy_colors:
+                        prof.enemy_colors.append(color)
+                    print(f"  Gegnerfarbe RGB={color} (gesamt {len(prof.enemy_colors)})")
             else:
                 patch = vision.extract_patch(img, cx, cy, 24) if want_patch else None
                 prof.set_point(key, cx, cy, patch)

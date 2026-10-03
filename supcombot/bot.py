@@ -11,6 +11,7 @@ from .camera import CalibrationError, Camera
 from .capture import crop
 from .game import Game
 from .inputs import AbortedError
+from .livevision import FrameStream, Perception, Percepts
 from .log import get
 from .maps import MapInfo
 from .ollama import OllamaAdvisor
@@ -35,7 +36,8 @@ class Bot(threading.Thread):
         self.camera = Camera(game, map_info)
         self.eco = Economy(game.profile, settings)
         self.state = BotState()
-        self.ctx: MapContext = make_context(map_info, int(settings.get("start_slot", 1)), list(settings.get("enemy_slots", [])))
+        self.ctx: MapContext = make_context(map_info, int(settings.get("start_slot", 1)), list(settings.get("enemy_slots", [])),
+                                            list(settings.get("ally_slots", [])))
         self.layout: Optional[dict] = None
         self.layout_used: set = set()
         self.stop_event = threading.Event()
@@ -46,6 +48,12 @@ class Bot(threading.Thread):
         self.last_ollama = 0.0
         self.base_radius = 60.0
         self._pending_actions: List[str] = []
+        self.last_defense = 0.0
+        vis = settings.get("vision", {})
+        self.stream = FrameStream(game, fps=vis.get("fps", 20), backend=vis.get("backend", "auto"))
+        game.stream = self.stream
+        self.perception = Perception(self.stream, game, self.camera, self.ctx, hz=vis.get("perception_hz", 5),
+                                     base_radius=self.base_radius, scan_whole_map=bool(vis.get("scan_whole_map", True)))
         self.new_game()
 
     # ------------------------------------------------------------------ lifecycle
@@ -65,6 +73,7 @@ class Bot(threading.Thread):
                     self.state.event(f"Layout geladen: {self.state.layout_slots} Slots, {self.layout.get('wins', 0)} Siege")
             self.state.event(f"Neues Spiel: {self.map.name}, Start {self.settings.get('start_slot')}, Gegner {len(self.ctx.enemies)}")
             self.camera.detect_failures = 0
+            self.perception.ctx = self.ctx
         log.info("Neues Spiel vorbereitet: %s (%dx%d), %d Mass-Marker", self.map.name, *self.map.size, len(self.map.mass))
 
     def request(self, action: str) -> None:
@@ -87,6 +96,10 @@ class Bot(threading.Thread):
     # ------------------------------------------------------------------ main loop
     def run(self) -> None:
         log.info("Bot-Thread gestartet")
+        if not self.stream.is_alive():
+            self.stream.start()
+        if not self.perception.is_alive():
+            self.perception.start()
         while not self.stop_event.is_set():
             try:
                 self._process_requests()
@@ -122,6 +135,8 @@ class Bot(threading.Thread):
                 self.game.inputs.release_all()
                 time.sleep(1.0)
         self.game.inputs.release_all()
+        self.perception.stop()
+        self.stream.stop()
         log.info("Bot-Thread beendet")
 
     def _process_requests(self) -> None:
@@ -167,7 +182,27 @@ class Bot(threading.Thread):
             "result": s.result,
             "map": self.map.name,
             "start": self.settings.get("start_slot"),
+            "vision_fps": round(self.stream.measured_fps, 1),
+            "vision_backend": self.stream.backend,
+            "map_view_valid": self.percepts().map_view_valid,
+            "enemies_near_base": self.percepts().enemies_near_base,
+            "enemies_total": self.percepts().enemies_total,
+            "analysis_ms": round(self.percepts().analysis_ms, 1),
+            "allies": len(self.settings.get("ally_slots", [])),
+            "enemies": len(self.ctx.enemies),
         })
+
+    def set_slots(self, start_slot: int, enemy_slots, ally_slots) -> None:
+        """Re-create the map context after the slot assignment changed (multiplayer lobbies)."""
+        self.settings["start_slot"] = int(start_slot)
+        self.settings["enemy_slots"] = list(enemy_slots)
+        self.settings["ally_slots"] = list(ally_slots)
+        self.ctx = make_context(self.map, int(start_slot), list(enemy_slots), list(ally_slots))
+        self.perception.ctx = self.ctx
+        self.request("new_game")
+
+    def percepts(self) -> Percepts:
+        return self.perception.percepts()
 
     # ------------------------------------------------------------------ one tick
     def tick(self) -> None:
@@ -176,16 +211,27 @@ class Bot(threading.Thread):
         self._set_status("Aktiv")
         self.camera.ensure_strategic(redetect=(self.tick_count % 5 == 1))
         img = self.game.screenshot()
-        self.eco.read(img, s)
+        p = self.percepts()
+        live = time.time() - p.ts < 1.5
+        if live and p.mass is not None:
+            self.eco.apply(p.mass, p.energy or 0.0, s)
+        else:
+            self.eco.read(img, s)
         self.update_strategy()
-        if self.detect_end(img):
+        if (live and p.end_result and self._finish_from_percept(p.end_result)) or self.detect_end(img):
             return
         if not s.opening_done:
             self.do_opening()
             self._after_tick()
             return
-        self.update_army_estimate(img)
+        if live and p.map_view_valid and p.army_seen is not None:
+            s.army_seen = p.army_seen
+            s.army_estimate = attack_plan.estimate_army(s)
+        else:
+            self.update_army_estimate(img)
         actions = 0
+        if self.settings.get("auto_defense") and live and p.map_view_valid and p.enemies_near_base > 0:
+            actions += self.handle_defense(p)
         if self.settings.get("build_manager"):
             actions += self.handle_idle_engineers(max_jobs=2)
         if self.settings.get("production_manager"):
@@ -262,6 +308,25 @@ class Bot(threading.Thread):
                 self.finish_game(won, "erkannt")
                 return True
         return False
+
+    def _finish_from_percept(self, result: str) -> bool:
+        self.finish_game(result == "won", "live erkannt")
+        return True
+
+    def handle_defense(self, p: Percepts) -> int:
+        """Enemy icons inside the base: send everything at the rally point against them (every 20 s)."""
+        s = self.state
+        now = time.time()
+        if now - self.last_defense < 20 or p.enemy_world is None:
+            return 0
+        self.last_defense = now
+        self.camera.box_select_world(self.ctx.rally[0], self.ctx.rally[1], 30)
+        self.game.wait(0.3)
+        mod = self.settings.get("input", {}).get("attack_move_modifier", "alt") or None
+        self.camera.click_world(p.enemy_world[0], p.enemy_world[1], button="right", modifier=mod)
+        self.game.deselect()
+        s.event(f"Verteidigung: {p.enemies_near_base} Gegner-Symbole bei ({int(p.enemy_world[0])},{int(p.enemy_world[1])})")
+        return 1
 
     def finish_game(self, won: bool, how: str) -> None:
         s = self.state
@@ -461,7 +526,9 @@ class Bot(threading.Thread):
     # ------------------------------------------------------------------ attacks
     def launch_wave(self, reason: str) -> None:
         s = self.state
-        target = attack_plan.pick_target(s, self.ctx, self.ctx.rally)
+        p = self.percepts()
+        clusters = p.enemy_clusters if (time.time() - p.ts < 1.5 and p.map_view_valid) else None
+        target = attack_plan.pick_target(s, self.ctx, self.ctx.rally, clusters, self.base_radius)
         if target is None:
             s.event("Kein Angriffsziel (keine Gegnerposition bekannt)")
             return

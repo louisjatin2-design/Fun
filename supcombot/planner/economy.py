@@ -20,6 +20,10 @@ class Economy:
         el, er = self.profile.point("ui.eco.energy_left"), self.profile.point("ui.eco.energy_right")
         mass = vision.bar_fill_ratio(img, ml[0], mr[0], (ml[1] + mr[1]) // 2)
         energy = vision.bar_fill_ratio(img, el[0], er[0], (el[1] + er[1]) // 2)
+        self.apply(mass, energy, state)
+
+    def apply(self, mass: float, energy: float, state: BotState) -> None:
+        """Feed bar ratios (from a screenshot or the live perception) into the state."""
         state.mass_ratio, state.energy_ratio = mass, energy
         state.mass_history = (state.mass_history + [mass])[-20:]
         state.energy_history = (state.energy_history + [energy])[-20:]

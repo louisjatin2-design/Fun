@@ -31,8 +31,17 @@ def estimate_army(state: BotState) -> float:
     return max(0.0, state.army_ordered * 0.9 - sent)
 
 
-def pick_target(state: BotState, ctx: MapContext, from_pos: Tuple[float, float]) -> Optional[Tuple[float, float]]:
-    """Enemy mass markers closest to our rally but clearly on the enemy side, then the enemy start."""
+def pick_target(state: BotState, ctx: MapContext, from_pos: Tuple[float, float],
+                seen_clusters=None, base_radius: float = 60.0) -> Optional[Tuple[float, float]]:
+    """Seen enemy clusters first (live vision), then enemy mass markers on their side, then the enemy start."""
+    seen = [(x, z, n) for x, z, n in (seen_clusters or [])
+            if n >= 2 and dist((x, z), ctx.start) > base_radius * 1.2]
+    if seen:
+        if state.aggression >= 3:
+            best = max(seen, key=lambda c: c[2])
+        else:
+            best = min(seen, key=lambda c: dist((c[0], c[1]), from_pos))
+        return (best[0], best[1])
     if not ctx.enemies:
         return None
     nearest_enemy = min(ctx.enemies, key=lambda e: dist(e, from_pos))
