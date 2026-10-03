@@ -34,6 +34,7 @@ DEFAULT_SETTINGS: dict = {
     # Managers (all toggleable in the overlay)
     "bot_enabled": False,
     "auto_attack": False,
+    "auto_defense": True,               # react to enemy-coloured icons near the base (needs colors.enemy)
     "build_manager": True,
     "production_manager": True,
     "eco_manager": True,
@@ -76,6 +77,14 @@ DEFAULT_SETTINGS: dict = {
         "settle_after_zoom": 0.6,
     },
     "overlay": {"x": 20, "y": 120, "alpha": 0.88},
+    # Live vision: continuous capture of the game window instead of on-demand screenshots
+    "vision": {
+        "fps": 20,                      # capture rate of the frame stream
+        "backend": "auto",              # auto | dxcam | mss
+        "perception_hz": 5,             # how often the frames are analysed
+        "preview": False,               # open the "Bot-Sicht" window at start
+        "preview_width": 520,
+    },
     "debug": False,
     "dry_run": False,
 }

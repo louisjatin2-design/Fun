@@ -51,6 +51,7 @@ CALIBRATION_STEPS: List[Tuple[str, str, bool, bool]] = [
     ("ui.eco.energy_left", "Zeige auf das LINKE Ende der ENERGIE-Speicherleiste.", False, True),
     ("ui.eco.energy_right", "Zeige auf das RECHTE Ende der ENERGIE-Speicherleiste.", False, True),
     ("colors.team", "Volle Zoomstufe heraus (Mausrad). Zeige auf das Symbol DEINES ACU (Teamfarbe wird gesampelt).", False, True),
+    ("colors.enemy", "Optional: zeige (ganz herausgezoomt) auf das Symbol einer GEGNER-Einheit oder eines Gegner-Gebaeudes. Mehrere Gegnerfarben: Schritt mit --only colors.enemy wiederholen.", False, False),
 ]
 
 
@@ -75,6 +76,7 @@ class Profile:
     points: Dict[str, dict] = field(default_factory=dict)  # key -> {"x","y","patch"?}
     map_rects: Dict[str, List[int]] = field(default_factory=dict)  # map key -> [x,y,w,h] (client coords)
     team_color: Optional[List[int]] = None
+    enemy_colors: List[List[int]] = field(default_factory=list)
     templates: Dict[str, str] = field(default_factory=dict)  # name -> base64 png (e.g. victory dialog)
     template_pos: Dict[str, List[int]] = field(default_factory=dict)
     calibrated: bool = False
@@ -94,6 +96,7 @@ class Profile:
             prof.points = data.get("points", {})
             prof.map_rects = data.get("map_rects", {})
             prof.team_color = data.get("team_color")
+            prof.enemy_colors = data.get("enemy_colors", [])
             prof.templates = data.get("templates", {})
             prof.template_pos = data.get("template_pos", {})
             prof.calibrated = bool(data.get("calibrated", False))
@@ -117,6 +120,7 @@ class Profile:
             "points": self.points,
             "map_rects": self.map_rects,
             "team_color": self.team_color,
+            "enemy_colors": self.enemy_colors,
             "templates": self.templates,
             "template_pos": self.template_pos,
         }
@@ -173,4 +177,4 @@ class Profile:
         return rects
 
     def missing_required(self) -> List[str]:
-        return [key for key, _i, _p, required in CALIBRATION_STEPS if required and not self.has(key) and key != "colors.team"]
+        return [key for key, _i, _p, required in CALIBRATION_STEPS if required and not self.has(key) and not key.startswith("colors.")]
