@@ -14,6 +14,10 @@ mit **Maus- und Tastatureingaben** (SendInput). Ein Overlay-Fenster über dem Sp
 - Ollama: lokale KI bewertet den Zustand alle 45 s und passt Strategie, Schwelle, Ingenieur-Zahl, Armee-Mix an
 - Layout-Gedächtnis: nach einem Sieg wird das Basis-Layout je Karte + Startposition gespeichert und beim
   nächsten Spiel bevorzugt wiederverwendet (zwei Niederlagen in Folge verwerfen es), per Schalter abschaltbar
+- **Live-Sicht**: kontinuierlicher Bildstrom des Spielfensters (dxcam/Desktop Duplication, Fallback mss) statt
+  Einzel-Screenshots; eine Wahrnehmungsschicht wertet mehrmals pro Sekunde aus (Wirtschaft, Idle-Symbole, Armee am
+  Sammelpunkt, Gegner nahe Basis, Spielende) und ein Vorschaufenster „Bot-Sicht“ zeigt, was der Bot sieht
+- Automatische Verteidigung: Gegner-Symbole in der Basis lösen einen Gegenangriff vom Sammelpunkt aus
 - Overlay mit allen Schaltern, Strategie (balanced/eco/rush/turtle), Aggression, Schwellen, globale Hotkeys
 
 > **Wichtig:** Der Bot kann nicht getestet werden, ohne dass das Spiel läuft. Alle Spiel-Positionen
@@ -129,7 +133,22 @@ Ohne Ollama läuft der Bot ganz normal.
 Dateien: Einstellungen `%APPDATA%\SupComBot\settings.json`, Profile `...\profiles\`, Layouts `...\layouts\`,
 Logs `...\logs\supcombot.log`.
 
-## 7. Wie es funktioniert
+## 7. Live-Sicht
+
+Der Bot nimmt das Spielfenster dauerhaft auf (Standard 20 fps, `vision.fps` in `settings.json`). Unter Windows wird
+`dxcam` (Desktop Duplication, sehr geringe Latenz) genutzt, sonst `mss`. Der Wahrnehmungs-Thread wertet die Bilder
+mit `vision.perception_hz` (Standard 5/s) aus; die Bot-Schleife greift nur noch auf diese Ergebnisse zu und wartet
+nie auf einen Screenshot. Die Overlay-Zeile „Live-Sicht“ zeigt fps, Backend, ob die Kartenansicht gerade gültig ist
+(ganz herausgezoomt) und wie viele Gegner-Symbole in der Basis erkannt wurden.
+
+- Button **„Bot-Sicht (Live)“** öffnet ein Fenster mit dem Livebild plus Markierungen: Kartenrechteck (blau = gültig,
+  orange = nicht herausgezoomt), Start (grün), Sammelpunkt (gelb), Gegnerstarts (rotes X), eigene Bauaufträge
+  (Quadrate), letztes Angriffsziel (roter Kreis), erkannte Gegner (rote Punkte). `vision.preview: true` öffnet es automatisch.
+- Für die Gegner-Erkennung einmal `.\calibrate.ps1 --only colors.enemy` ausführen und auf ein Gegner-Symbol zeigen
+  (pro Gegnerfarbe wiederholen). Ohne Gegnerfarbe bleibt die Verteidigung passiv.
+- Button **„Verteidigung“** (bzw. `auto_defense`) schaltet den Gegenangriff bei Gegnern in der Basis ein/aus.
+
+## 8. Wie es funktioniert
 
 Siehe [docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md). Kurz: Der Bot arbeitet auf **voller Herauszoom-Stufe**,
 dort ist die ganze Karte sichtbar und Weltkoordinaten lassen sich linear auf das erkannte Kartenrechteck
@@ -137,14 +156,14 @@ abbilden. Mass-Punkte werden so auf 1–2 Pixel genau getroffen, der Mex-Bauplat
 Einheiten erkennt der Bot über die Idle-Symbole der Avatar-Leiste (Ingenieure, Fabriken) und über Farbblobs
 in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchführung.
 
-## 8. Bekannte Grenzen (ehrlich)
+## 9. Bekannte Grenzen (ehrlich)
 
 - **Ungetestet gegen das echte Spiel.** Ich konnte das Spiel hier nicht starten. Die Logik ist mit Tests und einem
   Dry-Run abgesichert, die Spiel-Interaktion (Buttons, Zoomverhalten, Attack-Move) musst du beim ersten Lauf prüfen.
   `--debug` legt Screenshots ab, das Log zeigt jede Eingabe.
 - Der Bot teilt sich Maus und Tastatur mit dir. Gleichzeitiges Spielen geht nicht; Ctrl+Alt+B stoppt sofort.
-- Keine Gegner-Wahrnehmung: Angriffsziele sind bekannte Positionen (Mex-Punkte auf Gegnerseite, Startpunkt),
-  keine Rückzugslogik, keine automatische Verteidigung. Verluste werden über Wellen geschätzt.
+- Gegner-Wahrnehmung nur über kalibrierte Gegnerfarben in der Basis-Umgebung. Angriffsziele sind bekannte
+  Positionen (Mex-Punkte auf Gegnerseite, Startpunkt), keine Rückzugslogik. Verluste werden über Wellen geschätzt.
 - Bauplätze werden nicht auf Gültigkeit geprüft. Ungültige Plätze (Klippen, Wasser) ignoriert das Spiel stillschweigend;
   der Bot glaubt dann, gebaut zu haben. Siege merken sich daher nur Layouts, die funktioniert haben.
 - Einkommenswerte werden nicht gelesen (nur Speicher-Füllstände). Daher zeitbasierte Budgets.
@@ -154,10 +173,10 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 - Karten > 20 km (2048 Einheiten) haben bei 1080p nur 0,5 px pro Einheit; dort hilft
   `input.precision_zoom_notches` (z. B. 6): vor jedem Klick wird am Cursor hineingezoomt und wieder heraus.
 
-## 9. Vorschläge Quality of Life (noch nicht gebaut)
+## 10. Vorschläge Quality of Life (noch nicht gebaut)
 
 1. **OCR der Einkommenszahlen** (pytesseract) für echte Masse-/Energie-Bilanz statt Füllstandsheuristik.
-2. **Gegner-Icons erkennen** (Teamfarben-Blobs auf der ganzen Karte) für Verteidigung, Rückzug und Zielwahl.
+2. **Gegner-Icons auf der ganzen Karte** (nicht nur in der Basis) für Rückzug und dynamische Zielwahl.
 3. **Bauplatz-Prüfung** per Farbe der Bauvorschau (grün/rot) vor dem Klick.
 4. **Automatische Start-Slot-Erkennung**: ACU-Icon in Teamfarbe am Spielstart suchen und dem nächsten ARMY-Marker zuordnen.
 5. **Fabrik-Upgrades und T2/T3-Produktion** mit zusätzlichen Kalibrierpunkten.
@@ -167,7 +186,7 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 9. **Replay-Auswertung**: nach dem Spiel Log + Ereignisse an Ollama geben und eine Nachbesprechung erzeugen.
 10. **Tray-Icon** statt Konsole, Autostart mit dem Spiel.
 
-## 10. Entwicklung
+## 11. Entwicklung
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install pytest
