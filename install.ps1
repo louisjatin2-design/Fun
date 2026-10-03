@@ -1,5 +1,5 @@
-# SupComBot Installation (Windows). Ausfuehren in PowerShell im Projektordner:
-#   powershell -ExecutionPolicy Bypass -File .\install.ps1
+# SupComBot Installation (Windows). Am einfachsten: install.bat (Doppelklick oder .\install.bat).
+# Direkt: powershell -ExecutionPolicy Bypass -File .\install.ps1
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
@@ -52,5 +52,5 @@ try {
 Write-Host ""
 Write-Host "Fertig. Naechste Schritte:" -ForegroundColor Cyan
 Write-Host "  1. Spiel im Fenstermodus starten (Steam-Startoption: /windowed), Skirmish laden"
-Write-Host "  2. .\calibrate.ps1      (einmalig pro Fraktion und Aufloesung)"
-Write-Host "  3. .\start.ps1          (Bot + Overlay)"
+Write-Host "  2. .\calibrate.bat --faction uef   (einmalig pro Fraktion und Aufloesung)"
+Write-Host "  3. .\start.bat                    (Bot + Overlay)"

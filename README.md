@@ -29,24 +29,35 @@ mit **Maus- und Tastatureingaben** (SendInput). Ein Overlay-Fenster über dem Sp
 ## 1. Installation (Copy & Paste)
 
 Voraussetzungen: Windows 10/11, Steam-Version von Forged Alliance, **Python 3.10+** (python.org, Haken bei
-„Add python.exe to PATH“), Git. Ollama ist optional.
+„Add python.exe to PATH“), **Git** (git-scm.com). Ollama ist optional.
 
-PowerShell öffnen (Win+X → „Terminal“), dann:
+Eingabeaufforderung öffnen (Win+R → `cmd` → Enter) und Zeile für Zeile einfügen:
 
-```powershell
-cd $env:USERPROFILE\Documents
-git clone https://github.com/louisjatin2-design/Fun.git SupComBot
+```bat
+cd /d "%USERPROFILE%\Documents"
+git clone -b main https://github.com/louisjatin2-design/Fun.git SupComBot
 cd SupComBot
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+.\install.bat
 ```
 
-Update später:
+Wichtig ist `-b main`: Der Standard-Branch des Repos enthält noch das alte Spiel.
 
-```powershell
-cd $env:USERPROFILE\Documents\SupComBot
-git pull
-powershell -ExecutionPolicy Bypass -File .\install.ps1
+**Schon geklont und `install.ps1` fehlt?** Dann im vorhandenen Ordner auf `main` wechseln:
+
+```bat
+cd /d "%USERPROFILE%\SupComBot"
+git fetch origin
+git checkout main
+.\install.bat
 ```
+
+**Update später** (im SupComBot-Ordner):
+
+```bat
+.\update.bat
+```
+
+Alle `.bat`-Dateien laufen per Doppelklick, in cmd und in PowerShell (dort mit `.\` davor).
 
 ## 2. Spiel vorbereiten
 
@@ -59,9 +70,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 Im laufenden Skirmish (Spiel im Vordergrund):
 
-```powershell
-cd $env:USERPROFILE\Documents\SupComBot
-.\calibrate.ps1 --faction uef
+```bat
+.\calibrate.bat --faction uef
 ```
 
 Der Assistent sagt dir Schritt für Schritt, worauf du mit der Maus zeigen sollst (Baumenü-Buttons,
@@ -69,25 +79,30 @@ Fabrik-Buttons, Idle-Ingenieur-Symbol, Masse-/Energie-Leiste, deine Teamfarbe, K
 Herauszoom-Stufe). **F8** übernimmt, **F7** überspringt optionale Schritte, **F6** bricht ab.
 Pro Fraktion einmal wiederholen (`--faction cybran` usw.). Einzelne Punkte nachbessern:
 
-```powershell
-.\calibrate.ps1 --only ui.build.mex ui.idle_engineer
-.\calibrate.ps1 --map-rect                 # nur Kartenrechteck (pro Karte einmal)
-.\calibrate.ps1 --template victory         # nach einem Sieg: Sieg-Dialog aufnehmen (Auto-Erkennung)
-.\calibrate.ps1 --template defeat
+```bat
+.\calibrate.bat --only ui.build.mex ui.idle_engineer
+.\calibrate.bat --map-rect
+.\calibrate.bat --template victory
+.\calibrate.bat --template defeat
 ```
+
+`--map-rect` nimmt nur das Kartenrechteck auf (pro Karte einmal). `--template` speichert nach einem Sieg bzw. einer
+Niederlage den Dialog, damit das Spielende automatisch erkannt wird.
 
 Details: [docs/KALIBRIERUNG.md](docs/KALIBRIERUNG.md).
 
 ## 4. Spielen
 
-```powershell
-cd $env:USERPROFILE\Documents\SupComBot
-.\start.ps1                       # Karte wird automatisch erkannt
-.\start.ps1 --map "Seton"         # oder Karte vorgeben
-.\start.ps1 --debug               # ausführliches Log + Screenshots in %APPDATA%\SupComBot\debug
+```bat
+.\start.bat
+.\start.bat --map "Seton"
+.\start.bat --debug
 ```
 
-Ablauf: Spiel laden → im Spiel ganz herauszoomen → `start.ps1` → Overlay erscheint → Start-Slot im
+Ohne Argument wird die Karte automatisch erkannt. `--map` gibt sie vor, `--debug` schreibt ein ausführliches Log und
+Screenshots nach `%APPDATA%\SupComBot\debug`.
+
+Ablauf: Spiel laden → im Spiel ganz herauszoomen → `start.bat` → Overlay erscheint → Start-Slot im
 Overlay prüfen („Start-Slot +“) → **Ctrl+Alt+B** schaltet den Bot ein. Der Bot übernimmt dann Maus und
 Tastatur in kurzen Schüben (ca. alle 3 s). Solange er an ist, solltest du nicht selbst klicken.
 
@@ -108,9 +123,8 @@ Alle Hotkeys stehen in `%APPDATA%\SupComBot\settings.json` und sind änderbar.
 
 Ollama muss laufen (`ollama serve`) und ein Modell installiert sein, z. B.:
 
-```powershell
+```bat
 ollama pull llama3.1
-cd $env:USERPROFILE\Documents\SupComBot
 .\.venv\Scripts\python.exe -m supcombot ollama-test
 ```
 
@@ -121,7 +135,7 @@ Ohne Ollama läuft der Bot ganz normal.
 
 ## 6. Weitere Befehle
 
-```powershell
+```bat
 .\.venv\Scripts\python.exe -m supcombot maps          # erkannte Karten mit Mex-Zahl und Start-Slots
 .\.venv\Scripts\python.exe -m supcombot detect-map    # welche Karte sieht der Bot gerade?
 .\.venv\Scripts\python.exe -m supcombot screenshot    # Screenshot des Spielfensters speichern
@@ -144,7 +158,7 @@ nie auf einen Screenshot. Die Overlay-Zeile „Live-Sicht“ zeigt fps, Backend,
 - Button **„Bot-Sicht (Live)“** öffnet ein Fenster mit dem Livebild plus Markierungen: Kartenrechteck (blau = gültig,
   orange = nicht herausgezoomt), Start (grün), Sammelpunkt (gelb), Gegnerstarts (rotes X), eigene Bauaufträge
   (Quadrate), letztes Angriffsziel (roter Kreis), erkannte Gegner (rote Punkte). `vision.preview: true` öffnet es automatisch.
-- Für die Gegner-Erkennung einmal `.\calibrate.ps1 --only colors.enemy` ausführen und auf ein Gegner-Symbol zeigen
+- Für die Gegner-Erkennung einmal `.\calibrate.bat --only colors.enemy` ausführen und auf ein Gegner-Symbol zeigen
   (pro Gegnerfarbe wiederholen). Ohne Gegnerfarbe bleibt die Verteidigung passiv.
 - Button **„Verteidigung“** (bzw. `auto_defense`) schaltet den Gegenangriff bei Gegnern in der Basis ein/aus.
 
@@ -156,7 +170,7 @@ der Steam-Version. Er liest keinen Spielspeicher, sondern nur den Bildschirm. Zw
 1. **Lobby-Slots**: Im Overlay gibt es die Zeile „Lobby-Slots“ mit einem Button pro Startposition. Klicken wechselt
    `Ich → Gegner → Ally → leer`. Trage ein, auf welchem Slot du bist, wer Gegner und wer Verbündeter ist (Verbündete
    werden nie angegriffen und nicht als Ziel gezählt). Solange nichts markiert ist, gelten alle anderen Slots als Gegner.
-2. **Gegnerfarben**: Menschliche Gegner expandieren überall. Mit `.\calibrate.ps1 --only colors.enemy` (pro Gegnerfarbe
+2. **Gegnerfarben**: Menschliche Gegner expandieren überall. Mit `.\calibrate.bat --only colors.enemy` (pro Gegnerfarbe
    einmal, ganz herausgezoomt auf ein gegnerisches Symbol zeigen) scannt die Live-Sicht die **gesamte Karte** und
    Angriffswellen zielen auf gesehene Gegner-Cluster statt nur auf Startpositionen.
 
@@ -174,11 +188,12 @@ Die Standardwerte (`performance.profile: "max"`) sind auf diese Hardware ausgele
 | 5900X (12 Kerne) | Capture mit 60 fps (dxcam), Wahrnehmung 15×/s über die ganze Karte mit OpenCV-Multithreading (`performance.threads: 0` = alle Kerne bis auf zwei, die dem Spiel bleiben). |
 | 32 GB RAM | Bildpuffer und Modell-Kontext sind unkritisch; nichts weiter nötig. |
 
-```powershell
+```bat
 ollama pull qwen2.5:14b
-cd $env:USERPROFILE\Documents\SupComBot
-.\.venv\Scripts\python.exe -m supcombot ollama-test     # zeigt gewähltes Modell und GPU-Optionen
+.\.venv\Scripts\python.exe -m supcombot ollama-test
 ```
+
+Der Test zeigt das gewählte Modell und die GPU-Optionen.
 
 Schwächerer PC: `"performance": {"profile": "low"}` in `settings.json` (15 fps, 4 Auswertungen/s, nur Basis-Scan).
 Die Reihenfolge der bevorzugten Modelle steht unter `ollama.prefer`.
@@ -223,7 +238,7 @@ in Teamfarbe am Sammelpunkt (Armee-Schätzung). Alles andere ist eigene Buchfüh
 
 ## 13. Entwicklung
 
-```powershell
+```bat
 .\.venv\Scripts\python.exe -m pip install pytest
 .\.venv\Scripts\python.exe -m pytest -q
 ```
