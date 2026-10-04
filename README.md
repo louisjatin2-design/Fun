@@ -15,9 +15,18 @@ Eingabeaufforderung öffnen (Win+R → `cmd` → Enter) und einfügen:
 
 ```bat
 cd /d "%USERPROFILE%\Documents"
-git clone https://github.com/louisjatin2-design/Fun.git SupComBot
+git clone -b main https://github.com/louisjatin2-design/Fun.git SupComBot
 cd SupComBot
-.\install.bat
+install.bat
+```
+
+Wichtig ist `-b main`: Der Standard-Branch des Repos enthält noch das alte Spiel.
+
+Python und Git fehlen noch? In PowerShell einfügen, danach das Fenster schließen und ein neues öffnen:
+
+```powershell
+winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
 ```
 
 Schon vorhanden? Dann im SupComBot-Ordner:
