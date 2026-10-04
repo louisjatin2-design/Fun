@@ -174,3 +174,12 @@ def test_factory_upgrade_gates():
     assert Economy.can_upgrade_factory(s)
     s.mass_stall = True
     assert not Economy.can_upgrade_factory(s)
+
+
+def test_old_settings_are_migrated():
+    from supcombot import config
+
+    old = {"map": "auto", "start_slot": 1, "faction": "auto", "auto_attack": False, "game_dir": "D:/FA", "overlay": {"x": 5, "y": 6, "minimap": True}}
+    new = config.migrate(old)
+    assert new == {"game_dir": "D:/FA", "overlay": {"x": 5, "y": 6}, "settings_version": config.SETTINGS_VERSION}
+    assert config.migrate(new) is new

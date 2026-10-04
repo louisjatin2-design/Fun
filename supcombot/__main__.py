@@ -245,12 +245,14 @@ def cmd_run(settings: dict, args) -> int:
         time.sleep(1.5)
 
     chosen = None
-    if args.map or settings.get("map"):
-        chosen = find_map(maps, args.map or settings["map"])
+    wanted = args.map or str(settings.get("map") or "").strip()
+    if wanted.lower() == "auto":
+        wanted = ""
+    if wanted:
+        chosen = find_map(maps, wanted)
         if not chosen:
-            print("Karte nicht gefunden:", args.map or settings["map"])
-            return 1
-    elif game.hwnd:
+            print("Karte nicht gefunden:", wanted, "- versuche automatische Erkennung.")
+    if not chosen and game.hwnd:
         print("Karte wird erkannt: bitte im Spiel ganz herauszoomen ... (5 s)")
         time.sleep(5)
         img = game.screenshot()
