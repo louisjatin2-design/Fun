@@ -52,3 +52,17 @@ def test_blob_centroids_and_clusters():
     clusters = vision.cluster_points(cents, radius=8)
     assert len(clusters) == 2
     assert clusters[0][2] == 18  # the two close blobs merged (9 + 9 pixels)
+
+
+def test_placement_verdict_and_colours():
+    frame = np.zeros((40, 40, 3), dtype=np.uint8)
+    assert vision.placement_verdict(frame, 20, 20, 8) == "unknown"
+    frame[15:25, 15:25] = (220, 30, 30)
+    assert vision.placement_verdict(frame, 20, 20, 8) == "blocked"
+    frame[15:25, 15:25] = (40, 220, 40)
+    assert vision.placement_verdict(frame, 20, 20, 8) == "ok"
+    assert vision.whiteness(np.full((5, 5, 3), 230, dtype=np.uint8)) == 25
+    reg = np.full((9, 9, 3), (40, 40, 40), dtype=np.uint8)
+    reg[2:7, 2:7] = (200, 30, 30)
+    col = vision.dominant_color(reg)
+    assert col and col[0] > 150 and col[1] < 60

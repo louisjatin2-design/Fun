@@ -6,7 +6,6 @@ import time
 from typing import Optional, Tuple
 
 from . import vision
-from .game import Game
 from .log import get
 from .maps import MapInfo
 
@@ -18,46 +17,48 @@ class CalibrationError(RuntimeError):
 
 
 class Camera:
-    def __init__(self, game: Game, map_info: MapInfo) -> None:
+    def __init__(self, game, map_info: MapInfo) -> None:
         self.game = game
         self.map = map_info
         self.rect: Optional[Tuple[int, int, int, int]] = None
         self.last_zoom = 0.0
         self.detect_failures = 0
-        stored = game.profile.map_rects.get(map_info.key)
-        if stored:
-            self.rect = tuple(stored)  # type: ignore[assignment]
+        self.last_detect = 0.0
 
     # ------------------------------------------------------------------ zoom
     def zoom_out_fully(self) -> None:
-        notches = int(self.game.settings.get("input", {}).get("zoom_out_notches", 40))
+        notches = int(self.game.adv("zoom_out_notches", 30))
         self.game.wheel(-notches)
-        self.game.wait(self.game.settings.get("input", {}).get("settle_after_zoom", 0.6))
+        self.game.wait(0.5)
         self.last_zoom = time.time()
 
     def ensure_strategic(self, redetect: bool = True) -> Tuple[int, int, int, int]:
-        """Zoom out and (re)detect the map rectangle. Falls back to the stored rectangle."""
+        """Zoom out and (re)detect the map rectangle. Falls back to the last known rectangle."""
         self.zoom_out_fully()
-        if redetect:
+        if redetect or self.rect is None:
             img = self.game.screenshot()
-            rect = vision.detect_map_rect(img, self.game.profile.exclude_rects(), expected_aspect=self.map.aspect)
-            if rect and self._plausible(rect):
-                if self.rect is None or self._differs(rect, self.rect):
-                    log.info("Kartenrechteck erkannt: %s", rect)
-                    self.game.profile.map_rects[self.map.key] = list(rect)
-                    self.game.profile.save()
-                self.rect = rect
-                self.detect_failures = 0
-            else:
-                self.detect_failures += 1
-                if self.rect is None:
-                    self.game.save_debug(img, "maprect_fail")
-                    raise CalibrationError("Kartenrechteck nicht erkannt. Bitte `python -m supcombot calibrate --map-rect` ausfuehren.")
-                if self.detect_failures in (1, 10):
-                    log.warning("Kartenrechteck nicht erkannt (%d), nutze gespeichertes %s", self.detect_failures, self.rect)
+            self.detect(img, strict=self.rect is None)
         if self.rect is None:
             raise CalibrationError("Kein Kartenrechteck bekannt.")
         return self.rect
+
+    def detect(self, img, strict: bool = False) -> bool:
+        w, h = self.game.client_size
+        rect = vision.detect_map_rect(img, self.game.ui.exclude_rects(w, h), expected_aspect=self.map.aspect)
+        self.last_detect = time.time()
+        if rect and self._plausible(rect):
+            if self.rect is None or self._differs(rect, self.rect):
+                log.info("Kartenrechteck erkannt: %s", rect)
+            self.rect = rect
+            self.detect_failures = 0
+            return True
+        self.detect_failures += 1
+        if strict:
+            self.game.save_debug(img, "maprect_fail")
+            raise CalibrationError("Kartenrechteck nicht erkannt: bitte im Spiel ganz herauszoomen (Mausrad).")
+        if self.detect_failures in (1, 10, 50):
+            log.warning("Kartenrechteck nicht erkannt (%d), nutze gespeichertes %s", self.detect_failures, self.rect)
+        return False
 
     def _plausible(self, rect: Tuple[int, int, int, int]) -> bool:
         w, h = self.game.client_size
@@ -89,15 +90,7 @@ class Camera:
     # ------------------------------------------------------------------ world actions
     def click_world(self, x: float, z: float, button: str = "left", shift: bool = False, modifier: Optional[str] = None) -> None:
         cx, cy = self.world_to_client(x, z)
-        precision = int(self.game.settings.get("input", {}).get("precision_zoom_notches", 0))
-        if precision > 0:
-            # Zoom-to-cursor keeps the hovered world point under the cursor: zoom in for a precise click.
-            self.game.wheel(precision, (cx, cy))
-            self.game.wait(0.35)
-            self.game.click(cx, cy, button=button, shift=shift, modifier=modifier)
-            self.zoom_out_fully()
-        else:
-            self.game.click(cx, cy, button=button, shift=shift, modifier=modifier)
+        self.game.click(cx, cy, button=button, shift=shift, modifier=modifier)
 
     def hover_world(self, x: float, z: float) -> None:
         self.game.hover(*self.world_to_client(x, z))

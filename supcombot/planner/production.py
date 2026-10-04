@@ -1,4 +1,4 @@
-"""Factory production decisions."""
+"""Factory production decisions (role names, see uef.UNITS for the blueprint ids)."""
 from __future__ import annotations
 
 from typing import Dict, List
@@ -7,21 +7,23 @@ from ..state import BotState
 
 DEFAULT_MIX: Dict[str, Dict[str, float]] = {
     "balanced": {"tank": 0.55, "arty": 0.2, "maa": 0.15, "scout": 0.1},
-    "rush": {"tank": 0.7, "arty": 0.15, "maa": 0.1, "scout": 0.05},
+    "rush": {"tank": 0.65, "lab": 0.1, "arty": 0.1, "maa": 0.1, "scout": 0.05},
     "eco": {"tank": 0.5, "arty": 0.2, "maa": 0.2, "scout": 0.1},
     "turtle": {"tank": 0.4, "arty": 0.3, "maa": 0.25, "scout": 0.05},
 }
+LAND_ROLES = ("eng", "tank", "arty", "maa", "scout", "lab")
+AIR_ROLES = ("airScout", "inter", "bomber")
 
 
 def engineer_target(state: BotState, settings: dict) -> int:
-    n = int(settings.get("max_engineers", 12))
+    n = int(settings.get("max_engineers", 14))
     if state.advice and state.advice.get("maxEngineers"):
         n = int(state.advice["maxEngineers"])
     if state.strategy == "eco":
         n += 4
     if state.strategy == "rush":
         n = max(4, n - 4)
-    cap = 4 + state.count("mex") * 2
+    cap = 4 + state.count_base("mex") * 2
     return max(3, min(n, cap, 40))
 
 
@@ -50,11 +52,10 @@ def land_queue(state: BotState, settings: dict, available: List[str], count: int
 
 def pick_role(state: BotState, mix: Dict[str, float], available: List[str]) -> str:
     # Deterministic weighted round robin.
-    state.army_ordered += 0
     slot = (state.army_ordered * 0.37) % 1.0
     acc = 0.0
     chosen = "tank"
-    for role in ("tank", "arty", "maa", "scout"):
+    for role in ("tank", "arty", "maa", "scout", "lab"):
         acc += mix.get(role, 0.0)
         chosen = role
         if slot < acc:
@@ -66,22 +67,21 @@ def pick_role(state: BotState, mix: Dict[str, float], available: List[str]) -> s
 
 def air_queue(state: BotState, available: List[str], count: int) -> List[str]:
     out: List[str] = []
-    base = [r for r in available if not r.endswith("3")]
     for _ in range(count):
-        if state.air_ordered == 0 and "scout" in base:
-            out.append("scout")
-        elif state.focus == "air" and "bomber" in base and state.air_ordered % 3 == 2:
+        if state.air_ordered == 0 and "airScout" in available:
+            out.append("airScout")
+        elif state.focus == "air" and "bomber" in available and state.air_ordered % 3 == 2:
             out.append("bomber")
-        elif "inter" in base:
+        elif "inter" in available:
             out.append("inter")
-        elif base:
-            out.append(base[0])
+        elif available:
+            out.append(available[0])
         state.air_ordered += 1
     return out
 
 
 def tier_roles(roles: List[str], tech: int, available: List[str]) -> List[str]:
-    """Map T1 roles to the highest calibrated variant the factory can build (T3 > T2 > T1)."""
+    """Map T1 roles to the highest available variant the factory can build (T3 > T2 > T1)."""
     if tech < 2:
         return roles
     out = []
@@ -96,7 +96,7 @@ def tier_roles(roles: List[str], tech: int, available: List[str]) -> List[str]:
 
 
 def role_tier(role: str) -> int:
-    return 3 if role.endswith("3") else 2 if role.endswith("2") else 1
+    return 3 if role.endswith("3") else 2 if role.endswith("2") or role in ("shield2m", "hover2", "mml2") else 1
 
 
 def wants_home_guard(state: BotState) -> bool:

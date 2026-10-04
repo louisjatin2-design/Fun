@@ -7,13 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..maps import MapInfo, Marker
 from ..state import BotState
-
-# Approximate footprint (skirt) sizes in world units, used to keep structures apart.
-FOOTPRINT: Dict[str, float] = {
-    "landFac": 10.0, "airFac": 10.0, "pgen": 4.0, "pgen2": 7.0, "mex": 3.0, "hydro": 6.0, "massStorage": 3.0,
-    "pd": 3.0, "pd2": 4.0, "pd3": 6.0, "aa": 3.0, "aa2": 4.0, "aa3": 5.0, "radar": 3.0, "shield2": 5.0, "wall": 1.0,
-    "pgen3": 10.0,
-}
+from ..uef import FOOTPRINT
 
 
 @dataclass
@@ -173,6 +167,7 @@ def enemy_distance(ctx: MapContext, p: Tuple[float, float]) -> float:
 
 
 def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: bool, has_t3_items: bool = False) -> List[Wish]:
+    """UEF build wishes, highest priority first. Roles map to blueprint ids in uef.STRUCTURES."""
     t = state.game_time()
     strat = state.strategy
     wishes: List[Wish] = []
@@ -180,16 +175,16 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
     def add(role: str, prio: float, **kw) -> None:
         wishes.append(Wish(role=role, prio=prio, **kw))
 
-    n_pgen = state.count("pgen") + state.count("pgen2") * 3 + state.count("pgen3") * 12
-    n_mex = state.count("mex")
-    n_land = state.count("landFac")
-    n_air = state.count("airFac")
+    n_pgen = state.count("pgen") + state.count("pgen2") * 3 + state.count("pgen3") * 12 + state.count("hydro") * 4
+    n_mex = state.count_base("mex")
+    n_land = state.count_base("landFac")
+    n_air = state.count_base("airFac")
 
-    # Energy: ratio of generators to consumers, plus the bar reading.
-    want_pgen = 2 + n_mex // 2 + n_land * 2 + n_air * 3 + state.count("radar") * 2
+    # Energy: generators versus consumers, plus the bar/income reading.
+    want_pgen = 2 + n_mex // 2 + n_land * 2 + n_air * 3 + state.count_base("radar") * 2 + state.count("mex2") * 2
     if has_t3_items and t > 1200 and state.mass_ratio > 0.45:
         pgen_role = "pgen3"
-    elif has_t2_items and t > 600:
+    elif has_t2_items and t > 540:
         pgen_role = "pgen2"
     else:
         pgen_role = "pgen"
@@ -201,6 +196,12 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
     if n_land == 0:
         add("landFac", 98)
 
+    # Hydro close to home is the best early energy.
+    for h in ctx.info.hydro:
+        if h.name not in state.mex_taken and dist((h.x, h.z), ctx.start) < 70:
+            add("hydro", 90 if t < 480 else 84, pos=(h.x, h.z), marker=h.name)
+            break
+
     # Mass extractors within a radius that grows with time.
     radius = 45 + t / 60 * 12
     if strat == "eco":
@@ -208,7 +209,7 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
     if strat == "turtle":
         radius *= 0.7
     radius = max(45.0, min(radius, max(ctx.info.size)))
-    parallel = 2 + int(t // 240)
+    parallel = 2 + int(t // 200)
     if state.mass_float:
         parallel += 2
     if state.mass_stall:
@@ -222,50 +223,47 @@ def wishlist(state: BotState, ctx: MapContext, settings: dict, has_t2_items: boo
             prio -= 8
         add("mex", prio, pos=(m.x, m.z), marker=m.name)
 
-    # Hydro close to home.
-    for h in ctx.info.hydro:
-        if h.name not in state.mex_taken and dist((h.x, h.z), ctx.start) < 45:
-            add("hydro", 86, pos=(h.x, h.z), marker=h.name)
-            break
-
     # More factories as the game goes on (no income reading: use time, storage and mex count).
-    divisor = {"rush": 2.5, "balanced": 3.5, "eco": 5.0, "turtle": 4.5}.get(strat, 3.5)
-    target_land = max(1, min(6, int(n_mex / divisor) + (1 if state.mass_float else 0)))
+    divisor = {"rush": 2.5, "balanced": 3.2, "eco": 4.5, "turtle": 4.0}.get(strat, 3.2)
+    target_land = max(1, min(6, int(n_mex / divisor) + (1 if state.mass_float else 0) + (1 if t > 150 else 0)))
     if state.focus == "air":
         target_land = max(1, target_land - 1)
     if n_land < target_land and not state.mass_stall:
         add("landFac", 70)
     target_air = 0
-    if t > 300:
-        target_air = min(3, n_mex // 6)
+    if t > 270:
+        target_air = min(2, 1 + n_mex // 8)
     if state.focus == "air":
         target_air += 1
     if n_air < target_air and not state.mass_stall:
-        add("airFac", 62)
+        add("airFac", 64)
 
-    if state.count("radar") == 0 and t > 180:
-        add("radar", 66)
+    if state.count_base("radar") == 0 and t > 150:
+        add("radar", 72)
 
-    want_pd = 4 if strat == "turtle" else (1 if t > 420 else 0)
+    threatened = bool(state.waves) and any(w.retreating for w in state.waves)
+    want_pd = 4 if strat == "turtle" else (2 if threatened else (1 if t > 400 else 0))
     want_aa = 3 if strat == "turtle" else (2 if t > 480 else 0)
-    if state.count("pd") + state.count("pd2") + state.count("pd3") < want_pd:
-        add("pd3" if has_t3_items else "pd2" if has_t2_items else "pd", 60, toward_enemy=True)
-    if state.count("aa") + state.count("aa2") + state.count("aa3") < want_aa:
+    if state.count_base("pd") < want_pd:
+        add("pd2" if has_t2_items else "pd", 60, toward_enemy=True)
+    if state.count_base("aa") < want_aa:
         add("aa3" if has_t3_items else "aa2" if has_t2_items else "aa", 58, toward_enemy=(strat != "turtle"))
     if has_t2_items and t > 900 and state.count("shield2") < 1 and state.mass_ratio > 0.5:
-        add("shield2", 40)
-    if t > 600 and state.mass_ratio > 0.5 and state.count("massStorage") < 4:
-        add("massStorage", 35, near_mex=True)
+        add("shield2", 44)
+    if has_t2_items and t > 840 and state.count("radar2") < 1 and state.count_base("radar") >= 1 and state.mass_ratio > 0.5:
+        add("radar2", 42)
+    if t > 540 and state.mass_ratio > 0.6 and state.count("massStorage") < 4 and n_mex >= 4:
+        add("massStorage", 36, near_mex=True)
 
     wishes.sort(key=lambda w: w.prio, reverse=True)
     return wishes
 
 
 DEFAULT_OPENINGS: Dict[str, List[str]] = {
-    "balanced": ["landFac", "mex", "mex", "pgen", "pgen", "mex", "mex"],
-    "rush": ["landFac", "mex", "mex", "pgen", "landFac", "mex"],
-    "eco": ["mex", "mex", "landFac", "pgen", "pgen", "mex", "mex", "pgen"],
-    "turtle": ["landFac", "mex", "mex", "pgen", "pgen", "pd", "mex"],
+    "balanced": ["landFac", "mex", "mex", "pgen", "mex", "mex", "pgen", "pgen"],
+    "rush": ["landFac", "mex", "mex", "pgen", "mex", "landFac", "mex", "pgen"],
+    "eco": ["mex", "mex", "landFac", "pgen", "mex", "mex", "pgen", "pgen"],
+    "turtle": ["landFac", "mex", "mex", "pgen", "mex", "mex", "pd", "pgen"],
 }
 
 

@@ -1,5 +1,5 @@
 @echo off
-rem Erstdiagnose: Module, Spielfenster, Karten, Profil, Ollama
+rem Erstdiagnose: Module, Spieldateien, Spielfenster, UI-Erkennung, Ollama
 cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" (
   echo Bitte zuerst install.bat ausfuehren.
