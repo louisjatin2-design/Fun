@@ -9,7 +9,7 @@ import ctypes
 import os
 import threading
 import time
-from typing import Optional
+from typing import List, Optional
 
 IS_WINDOWS = os.name == "nt"
 
@@ -27,20 +27,36 @@ KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
 
-# Virtual-key codes for the keys we use.
+# Virtual-key codes. Keys are named like in the game's keymap files (keyNames.lua) plus common aliases.
 VK = {
-    "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "escape": 0x1B, "esc": 0x1B, "space": 0x20,
-    "enter": 0x0D, "tab": 0x09, "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
-    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "delete": 0x2E, "insert": 0x2D,
+    "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "escape": 0x1B, "esc": 0x1B, "space": 0x20, "enter": 0x0D, "tab": 0x09,
+    "backspace": 0x08, "pause": 0x13, "capslock": 0x14,
+    "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22, "insert": 0x2D, "delete": 0x2E,
+    "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
+    "leftarrow": 0x25, "uparrow": 0x26, "rightarrow": 0x27, "downarrow": 0x28,
+    "comma": 0xBC, "period": 0xBE, "minus": 0xBD, "equals": 0xBB, "plus": 0xBB, "semicolon": 0xBA, "slash": 0xBF,
+    "tilde": 0xC0, "lbracket": 0xDB, "backslash": 0xDC, "rbracket": 0xDD, "quote": 0xDE,
+    "numstar": 0x6A, "numplus": 0x6B, "numminus": 0x6D, "numperiod": 0x6E, "numslash": 0x6F,
 }
 for _i in range(10):
     VK[str(_i)] = 0x30 + _i
+    VK[f"num{_i}"] = 0x60 + _i
 for _c in "abcdefghijklmnopqrstuvwxyz":
     VK[_c] = 0x41 + ord(_c) - ord("a")
-for _f in range(1, 13):
+for _f in range(1, 25):
     VK[f"f{_f}"] = 0x70 + _f - 1
 
-EXTENDED = {"home", "end", "pageup", "pagedown", "left", "up", "right", "down", "delete", "insert"}
+EXTENDED = {"home", "end", "pageup", "pagedown", "left", "up", "right", "down", "leftarrow", "uparrow", "rightarrow",
+            "downarrow", "delete", "insert", "numslash"}
+
+
+def parse_combo(combo: str) -> List[str]:
+    """'Ctrl-Shift-A' -> ['ctrl', 'shift', 'a'] (game keymap syntax). Returns [] for unknown keys."""
+    parts = [p.strip().lower() for p in combo.replace("+", "-").split("-") if p.strip()]
+    if not parts or any(p not in VK for p in parts):
+        return []
+    return parts
+
 
 if IS_WINDOWS:
     user32 = ctypes.windll.user32
@@ -91,7 +107,7 @@ class AbortedError(RuntimeError):
 
 
 class Inputs:
-    """Thread-safe-ish input sender. `dry_run` only logs; `abort` stops sequences."""
+    """Input sender. `dry_run` only logs; `abort` stops sequences."""
 
     def __init__(self, click_delay: float = 0.08, action_delay: float = 0.25, dry_run: bool = False, logger=None) -> None:
         self.click_delay = click_delay
@@ -99,7 +115,7 @@ class Inputs:
         self.dry_run = dry_run or not IS_WINDOWS
         self.abort = threading.Event()
         self.log = logger
-        self._held: list[str] = []
+        self._held: List[str] = []
         self.last_pos = None          # last cursor position set by the bot (user-activity detection)
         self.last_move_time = 0.0
         if IS_WINDOWS:
@@ -219,12 +235,22 @@ class Inputs:
             self.sleep(0.05)
 
     def hotkey(self, *keys: str) -> None:
+        """Press a combination such as ('ctrl', 'shift', 'a')."""
         for k in keys:
             self.key_down(k)
             time.sleep(0.02)
+        time.sleep(0.03)
         for k in reversed(keys):
             self.key_up(k)
             time.sleep(0.02)
+
+    def combo(self, combo: str) -> bool:
+        """Press a game keymap combo like 'Ctrl-Shift-A' or 'Comma'. Returns False when the name is unknown."""
+        keys = parse_combo(combo)
+        if not keys:
+            return False
+        self.hotkey(*keys)
+        return True
 
     def release_all(self) -> None:
         for k in list(self._held):

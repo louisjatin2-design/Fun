@@ -29,28 +29,20 @@ if (-not (Test-Path ".venv")) {
 & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Write-Host "Abhaengigkeiten installiert." -ForegroundColor Green
 
-# 3. Spiel-Installation suchen
+# 3. Spiel-Installation suchen und Spieldateien pruefen
 $found = & .\.venv\Scripts\python.exe -c "from supcombot.maps import steam_game_dir; d=steam_game_dir(); print(d if d else '')"
 if ($found) {
     Write-Host "Forged Alliance gefunden: $found" -ForegroundColor Green
+    & .\.venv\Scripts\python.exe -c "from pathlib import Path; from supcombot.gamefiles import GameFiles; f=GameFiles(Path(r'$found')); i=f.unit_icon('ueb0101'); print('Baumenue-Icons aus textures.scd lesbar:', 'ja' if i is not None else 'NEIN')"
 } else {
     Write-Host "Steam-Installation nicht automatisch gefunden. Trage 'game_dir' in %APPDATA%\SupComBot\settings.json ein." -ForegroundColor Yellow
 }
 
-# 4. Ollama pruefen
-try {
-    $tags = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 3
-    $names = ($tags.models | ForEach-Object { $_.name }) -join ", "
-    Write-Host "Ollama erreichbar. Modelle: $names" -ForegroundColor Green
-} catch {
-    Write-Host "Ollama nicht erreichbar (laeuft 'ollama serve'?). Der Bot funktioniert auch ohne, dann ohne KI-Anpassungen." -ForegroundColor Yellow
-}
-
-# 5. Settings-Datei anlegen
+# 4. Settings-Datei anlegen
 & .\.venv\Scripts\python.exe -c "from supcombot import config; s=config.load_settings(); config.save_settings(s); print('Einstellungen:', config.SETTINGS_FILE)"
 
 Write-Host ""
-Write-Host "Fertig. Naechste Schritte:" -ForegroundColor Cyan
-Write-Host "  1. Spiel im Fenstermodus starten (Steam-Startoption: /windowed), Skirmish laden"
-Write-Host "  2. .\calibrate.bat --faction uef   (einmalig pro Fraktion und Aufloesung)"
-Write-Host "  3. .\start.bat                    (Bot + Overlay)"
+Write-Host "Fertig. Keine Kalibrierung noetig. Naechste Schritte:" -ForegroundColor Cyan
+Write-Host "  1. Spiel im Fenstermodus starten (Steam-Startoption: /windowed), Skirmish als UEF laden"
+Write-Host "  2. .\start.bat                    (Bot + Overlay, dann Ctrl+Alt+B)"
+Write-Host "  Bei Problemen: .\doctor.bat"

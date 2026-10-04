@@ -2,7 +2,7 @@
 
 The stream keeps the latest frame in memory (dxcam / Desktop Duplication when available, mss otherwise),
 so the bot and the overlay never wait for a screenshot. Perception analyses frames several times per second
-and publishes `Percepts`: economy bars, idle symbols, army at the rally, enemies near the base, game end.
+and publishes `Percepts`: economy, idle buttons, army at the rally, enemies on the map, UI visibility.
 """
 from __future__ import annotations
 
@@ -48,10 +48,7 @@ class FrameStream(threading.Thread):
                 log.info("Live-Sicht: dxcam (Desktop Duplication)")
                 return
             except Exception as exc:
-                if self.backend_wanted == "dxcam":
-                    log.warning("dxcam nicht nutzbar (%s), Fallback auf mss", exc)
-                else:
-                    log.info("dxcam nicht verfuegbar (%s), nutze mss", exc)
+                log.info("dxcam nicht verfuegbar (%s), nutze mss", exc)
         try:
             self._capture = Capture()
             self.backend = "mss"
@@ -137,20 +134,21 @@ class Percepts:
     ts: float = 0.0
     mass: Optional[float] = None
     energy: Optional[float] = None
-    idle_engineer: bool = False
-    idle_factory: bool = False
-    build_panel: bool = False
+    mass_income: float = 0.0
+    energy_income: float = 0.0
+    ui_visible: bool = False                 # economy panel found: we are in a running game
+    idle_engineer: Optional[Tuple[int, int]] = None
+    idle_factory: Optional[Tuple[int, int]] = None
     map_view_valid: bool = False
     army_seen: Optional[int] = None
     enemies_near_base: int = 0
     enemy_world: Optional[Tuple[float, float]] = None
     enemy_points: List[Tuple[int, int]] = field(default_factory=list)   # client coords for the preview
-    enemy_clusters: List[Tuple[float, float, int]] = field(default_factory=list)  # world x, z, icon count (whole map)
+    enemy_clusters: List[Tuple[float, float, int]] = field(default_factory=list)  # world x, z, icon count
     enemies_total: int = 0
     friendly_clusters: List[Tuple[float, float, int]] = field(default_factory=list)
     friendly_total: int = 0
     analysis_ms: float = 0.0
-    end_result: Optional[str] = None
     fps: float = 0.0
     backend: str = "none"
 
@@ -158,21 +156,23 @@ class Percepts:
 class Perception(threading.Thread):
     """Analyses the live stream a few times per second and publishes Percepts."""
 
-    def __init__(self, stream: FrameStream, game, camera, ctx, hz: float = 5.0, base_radius: float = 60.0,
-                 scan_whole_map: bool = True) -> None:
+    def __init__(self, stream: FrameStream, game, camera, ctx, state, hz: float = 5.0, base_radius: float = 60.0) -> None:
         super().__init__(name="supcombot-perception", daemon=True)
         self.stream = stream
         self.game = game
         self.camera = camera
         self.ctx = ctx
+        self.state = state
         self.hz = max(0.5, float(hz))
         self.base_radius = base_radius
-        self.scan_whole_map = scan_whole_map
         self.stop_event = threading.Event()
         self._lock = threading.Lock()
         self._percepts = Percepts()
         self._last_rect_check = 0.0
+        self._last_avatar_check = 0.0
         self._map_view_valid = False
+        self._idle_eng: Optional[Tuple[int, int]] = None
+        self._idle_fac: Optional[Tuple[int, int]] = None
 
     def percepts(self) -> Percepts:
         with self._lock:
@@ -199,58 +199,48 @@ class Perception(threading.Thread):
 
     # ------------------------------------------------------------------ analysis (pure, testable)
     def analyze(self, frame: np.ndarray, ts: float) -> Percepts:
-        prof = self.game.profile
+        ui = self.game.ui
         p = Percepts(ts=ts, fps=self.stream.measured_fps, backend=self.stream.backend)
+        t_start = time.time()
 
-        # Economy bars.
-        if all(prof.has(k) for k in ("ui.eco.mass_left", "ui.eco.mass_right", "ui.eco.energy_left", "ui.eco.energy_right")):
-            ml, mr = prof.point("ui.eco.mass_left"), prof.point("ui.eco.mass_right")
-            el, er = prof.point("ui.eco.energy_left"), prof.point("ui.eco.energy_right")
-            p.mass = vision.bar_fill_ratio(frame, ml[0], mr[0], (ml[1] + mr[1]) // 2)
-            p.energy = vision.bar_fill_ratio(frame, el[0], er[0], (el[1] + er[1]) // 2)
+        eco = ui.read_economy(frame)
+        p.mass, p.energy = eco.mass, eco.energy
+        p.mass_income, p.energy_income = eco.mass_income, eco.energy_income
+        p.ui_visible = eco.mass is not None
 
-        # UI symbols.
-        p.idle_engineer = self.game.ui_visible("ui.idle_engineer", img=frame)
-        p.idle_factory = self.game.ui_visible("ui.idle_factory", img=frame)
-        p.build_panel = self.game.ui_visible("ui.build.mex", img=frame)
-
-        # End of game templates.
-        for name, result in (("victory", "won"), ("defeat", "lost")):
-            tpl = prof.template(name)
-            if tpl:
-                patch, x, y = tpl
-                if vision.match_template_at(frame, patch, x, y, search=4) > 0.86:
-                    p.end_result = result
+        # Idle buttons (template search in the avatar column) at most twice per second.
+        if ts - self._last_avatar_check > 0.5 and ui.scale is not None:
+            self._last_avatar_check = ts
+            self._idle_eng = ui.idle_engineer(frame)
+            self._idle_fac = ui.idle_factory(frame)
+        p.idle_engineer, p.idle_factory = self._idle_eng, self._idle_fac
 
         # Map based percepts only when the strategic view is on screen.
         if ts - self._last_rect_check > 1.0 and self.camera.rect is not None:
             self._last_rect_check = ts
-            rect = vision.detect_map_rect(frame, prof.exclude_rects(), expected_aspect=self.camera.map.aspect)
+            w, h = self.game.client_size
+            rect = vision.detect_map_rect(frame, ui.exclude_rects(w, h), expected_aspect=self.camera.map.aspect)
             self._map_view_valid = bool(rect) and not Camera_differs(rect, self.camera.rect)
         p.map_view_valid = self._map_view_valid and self.camera.rect is not None
         if not p.map_view_valid:
+            p.analysis_ms = (time.time() - t_start) * 1000
             return p
 
-        if prof.team_color:
+        team = self.state.team_color
+        if team:
             region = crop(frame, self.camera.world_rect_to_client(self.ctx.rally[0], self.ctx.rally[1], 28))
-            p.army_seen = vision.count_blobs(vision.color_mask(region, prof.team_color, tol=60), min_pixels=2, max_blobs=300)
-            if self.scan_whole_map:
-                p.friendly_clusters, p.friendly_total = self._clusters(frame, [prof.team_color], self.camera.rect)
+            p.army_seen = vision.count_blobs(vision.color_mask(region, team, tol=60), min_pixels=2, max_blobs=300)
+            p.friendly_clusters, p.friendly_total = self._clusters(frame, [team], self.camera.rect)
 
-        enemy_colors = getattr(prof, "enemy_colors", None) or []
+        enemy_colors = self.state.enemy_colors or []
         if enemy_colors:
-            t0 = time.time()
-            if self.scan_whole_map:
-                rect = self.camera.rect
-            else:
-                rect = self.camera.world_rect_to_client(self.ctx.start[0], self.ctx.start[1], self.base_radius)
-            p.enemy_clusters, p.enemies_total, p.enemy_points = self._clusters(frame, enemy_colors, rect, with_points=True)
+            p.enemy_clusters, p.enemies_total, p.enemy_points = self._clusters(frame, enemy_colors, self.camera.rect, with_points=True)
             near = [(x, z, n) for x, z, n in p.enemy_clusters
                     if (x - self.ctx.start[0]) ** 2 + (z - self.ctx.start[1]) ** 2 <= self.base_radius ** 2]
             p.enemies_near_base = int(sum(n for _x, _z, n in near))
             if near:
                 p.enemy_world = (near[0][0], near[0][1])
-            p.analysis_ms = (time.time() - t0) * 1000
+        p.analysis_ms = (time.time() - t_start) * 1000
         return p
 
     def _clusters(self, frame, colors, rect, with_points: bool = False):

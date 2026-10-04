@@ -1,4 +1,4 @@
-"""Command line entry point: python -m supcombot <command>."""
+"""Command line entry point: python -m supcombot [run|doctor|maps|screenshot|test-input|reports|layouts]."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from . import config, layouts, log as logmod, win
+from .gamefiles import GameFiles
 from .maps import find_map, list_maps, match_map, steam_game_dir
 
 
@@ -15,6 +16,29 @@ def _game_dir(settings: dict):
     return Path(gd) if gd else steam_game_dir()
 
 
+def _advisor(settings: dict):
+    from .ollama import OllamaAdvisor
+
+    o = settings.get("ollama", {})
+    return OllamaAdvisor(o.get("url", "http://localhost:11434"), o.get("model", "auto"), 60, "de")
+
+
+def _make_advisor(settings: dict, log):
+    o = settings.get("ollama", {})
+    mode = str(o.get("enabled", "auto")).lower()
+    if mode in ("false", "0", "off", "no", "aus"):
+        return None
+    adv = _advisor(settings)
+    if adv.check():
+        return adv
+    if mode == "auto":
+        log.info("Ollama nicht erreichbar - Bot laeuft ohne KI-Berater (das ist in Ordnung).")
+    else:
+        log.warning("Ollama aktiviert, aber nicht erreichbar: %s", adv.last_error)
+    return None
+
+
+# ------------------------------------------------------------------------------------------------ commands
 def cmd_maps(settings: dict, args) -> int:
     maps = list_maps(_game_dir(settings))
     if not maps:
@@ -27,64 +51,18 @@ def cmd_maps(settings: dict, args) -> int:
     return 0
 
 
-def cmd_detect_map(settings: dict, args) -> int:
+def cmd_screenshot(settings: dict, args) -> int:
     from .game import Game
-    from .profile import Profile
-    from .capture import crop
-    from . import vision
 
     win.set_dpi_aware()
-    game = Game(settings, Profile(settings["faction"], (1, 1)))
+    game = Game(settings, GameFiles(_game_dir(settings)))
     if not game.attach():
         print("Spielfenster nicht gefunden.")
         return 1
-    game.profile = Profile.load(settings["faction"], game.client_size)
-    print("Zoome im Spiel ganz heraus; Screenshot in 3 Sekunden ...")
-    time.sleep(3)
     img = game.screenshot()
-    rect = vision.detect_map_rect(img, game.profile.exclude_rects())
-    print("Kartenrechteck:", rect)
-    if not rect:
-        return 1
-    maps = list_maps(_game_dir(settings))
-    best, score = match_map(crop(img, rect), maps)
-    print(f"Beste Uebereinstimmung: {best.name if best else '-'} ({score:.2f})")
-    return 0
-
-
-def cmd_ollama(settings: dict, args) -> int:
-    adv = _advisor(settings)
-    if not adv.check():
-        print(adv.last_error)
-        return 1
-    print("Modelle:", ", ".join(adv.list_models()), "| gewaehlt:", adv.model, "| Optionen:", adv.options)
-    print("Teste Anfrage mit Beispielzustand ...")
-    state = {"t": 420, "phase": "expand", "strategy": "balanced", "mass": {"ratio": 0.04, "stall": True}, "energy": {"ratio": 0.7},
-             "structures": {"mex": 5, "pgen": 4, "landFac": 2}, "units": {"armyEstimate": 9}}
-    res = adv.ask(state, ["[06:40] Angriffswelle 1: ~12 Einheiten", "[07:00] Mass-Stall"])
-    print("Antwort:", res if res else adv.last_raw[:300])
-    return 0 if res else 1
-
-
-def _advisor(settings: dict):
-    from .ollama import OllamaAdvisor
-
-    o = settings["ollama"]
-    opts = {"num_ctx": o.get("num_ctx"), "num_gpu": o.get("num_gpu"), "num_thread": o.get("num_thread")}
-    return OllamaAdvisor(o["url"], o["model"], o.get("timeout", 60), o.get("language", "de"), o.get("prefer"), opts)
-
-
-def cmd_calibrate(settings: dict, args) -> int:
-    from .calibrate import capture_template, run_wizard
-
-    faction = args.faction or settings["faction"]
-    if args.template:
-        capture_template(settings, faction, args.template)
-        return 0
-    if faction == "auto":
-        print("Bitte Fraktion angeben: --faction uef|aeon|cybran|seraphim")
-        return 1
-    run_wizard(settings, faction, only=args.only, map_rect_only=args.map_rect, copy_from=args.copy_from)
+    p = config.DEBUG_DIR / f"screenshot_{int(time.time())}.png"
+    game.capture.save(img, p)
+    print("Gespeichert:", p, img.shape)
     return 0
 
 
@@ -103,22 +81,6 @@ def cmd_test_input(settings: dict, args) -> int:
     return 0
 
 
-def cmd_screenshot(settings: dict, args) -> int:
-    from .game import Game
-    from .profile import Profile
-
-    win.set_dpi_aware()
-    game = Game(settings, Profile(settings["faction"], (1, 1)))
-    if not game.attach():
-        print("Spielfenster nicht gefunden.")
-        return 1
-    img = game.screenshot()
-    p = config.DEBUG_DIR / f"screenshot_{int(time.time())}.png"
-    game.capture.save(img, p)
-    print("Gespeichert:", p, img.shape)
-    return 0
-
-
 def cmd_layouts(settings: dict, args) -> int:
     if args.clear:
         print(f"{layouts.clear_all()} Layout-Dateien geloescht.")
@@ -130,61 +92,6 @@ def cmd_layouts(settings: dict, args) -> int:
         data = layouts.load_map_layouts(f.stem)
         for sk, rec in data.items():
             print(f"  {f.stem:30s} Start {sk:12s} Siege {rec.get('wins', 0)} Niederl. {rec.get('losses', 0)} Slots {len(rec.get('entries', []))}")
-    return 0
-
-
-def cmd_doctor(settings: dict, args) -> int:
-    """First-run diagnosis: dependencies, game, maps, profile, Ollama."""
-    import importlib
-    import platform
-
-    ok, warn = "  OK   ", "  WARN "
-    print(f"SupComBot doctor  (Python {platform.python_version()}, {platform.system()} {platform.release()})")
-    print(f"{ok}Einstellungen: {config.SETTINGS_FILE}")
-    for mod, why in (("numpy", "Pflicht"), ("PIL", "Pflicht"), ("mss", "Pflicht"), ("keyboard", "Hotkeys"),
-                     ("cv2", "schnelle Bildanalyse"), ("dxcam", "60-fps-Capture")):
-        try:
-            importlib.import_module(mod)
-            print(f"{ok}Modul {mod}")
-        except Exception as exc:
-            print(f"{warn}Modul {mod} fehlt ({why}): {exc}")
-    gd = _game_dir(settings)
-    maps = list_maps(gd)
-    print(f"{ok if maps else warn}Spielordner: {gd}  Karten: {len(maps)}")
-    if not win.IS_WINDOWS:
-        print(f"{warn}Kein Windows: Spielfenster/Eingaben nicht pruefbar")
-        return 0
-    from .profile import Profile
-
-    hwnd = win.find_window(settings.get("window_title", "Forged Alliance"))
-    if hwnd:
-        rect = win.client_rect(hwnd)
-        print(f"{ok}Spielfenster gefunden: {win.window_title(hwnd)} Client {rect[2]}x{rect[3]}")
-        res = (rect[2], rect[3])
-    else:
-        print(f"{warn}Spielfenster nicht gefunden (Titel enthaelt '{settings.get('window_title')}'?). Spiel starten.")
-        res = (1920, 1080)
-    avail = Profile.available(res)
-    print(f"{ok if avail else warn}Kalibrierte Fraktionen fuer {res[0]}x{res[1]}: {', '.join(f for f, _p in avail) or 'keine'}  (faction={settings['faction']})")
-    prof = avail[0][1] if settings["faction"] == "auto" and avail else Profile.load(settings["faction"] if settings["faction"] != "auto" else "uef", res)
-    missing = prof.missing_required()
-    print(f"{ok if not missing else warn}Profil {prof.faction} {res[0]}x{res[1]}: " + ("vollstaendig" if not missing else "fehlend: " + ", ".join(missing)))
-    optional = [k for k, _i, _p, req in __import__('supcombot.profile', fromlist=['CALIBRATION_STEPS']).CALIBRATION_STEPS if not req and not prof.has(k) and not k.startswith("colors.")]
-    if optional:
-        print(f"       optional nicht kalibriert: {', '.join(optional)}")
-    print(f"{ok if prof.team_color else warn}Teamfarbe: {prof.team_color}")
-    print(f"{ok if prof.enemy_colors else warn}Gegnerfarben: {prof.enemy_colors or 'keine (calibrate --only colors.enemy)'}")
-    print(f"{ok if prof.map_rects else warn}Kartenrechtecke: {len(prof.map_rects)}")
-    for name in ("victory", "defeat"):
-        print(f"{ok if name in prof.templates else warn}Vorlage {name}: " + ("vorhanden" if name in prof.templates else "fehlt (Spielende per Hotkey melden oder calibrate --template)"))
-    key = settings.get("input", {}).get("select_acu_key")
-    print(f"{ok if key else warn}ACU-Taste: {key or 'nicht gesetzt (ACU-Rettung aus)'}")
-    if settings.get("use_ollama"):
-        adv = _advisor(settings)
-        if adv.check():
-            print(f"{ok}Ollama: Modell {adv.model}, Optionen {adv.options}")
-        else:
-            print(f"{warn}Ollama: {adv.last_error}")
     return 0
 
 
@@ -200,7 +107,7 @@ def cmd_reports(settings: dict, args) -> int:
     for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
-            print(f"  {d.get('time')}  {d.get('map'):28s} {d.get('result'):5s} {d.get('game_seconds', 0) // 60:3d} min  {d.get('strategy')}  Wellen {len(d.get('waves', []))}")
+            print(f"  {d.get('time')}  {d.get('map'):28s} {d.get('result'):7s} {d.get('game_seconds', 0) // 60:3d} min  {d.get('strategy')}  Wellen {len(d.get('waves', []))}")
             if args.last and f is files[0] and d.get("debrief"):
                 print("\n" + d["debrief"] + "\n")
         except Exception:
@@ -208,77 +115,159 @@ def cmd_reports(settings: dict, args) -> int:
     return 0
 
 
+def cmd_doctor(settings: dict, args) -> int:
+    """First-run diagnosis: modules, game files, window, UI recognition on the live screen."""
+    import importlib
+    import platform
+
+    ok, warn = "  OK   ", "  WARN "
+    print(f"SupComBot doctor  (Python {platform.python_version()}, {platform.system()} {platform.release()})")
+    print(f"{ok}Einstellungen: {config.SETTINGS_FILE}")
+    for mod, why in (("numpy", "Pflicht"), ("PIL", "Pflicht"), ("mss", "Pflicht"), ("keyboard", "Hotkeys"), ("cv2", "schnellere Bildanalyse (optional)"), ("dxcam", "schnelleres Capture (optional)")):
+        try:
+            importlib.import_module(mod)
+            print(f"{ok}Modul {mod}")
+        except Exception as exc:
+            print(f"{warn}Modul {mod} fehlt ({why}): {exc}")
+    gd = _game_dir(settings)
+    files = GameFiles(gd)
+    maps = list_maps(gd)
+    print(f"{ok if maps else warn}Spielordner: {gd}  Karten: {len(maps)}")
+    for arc, path, what in (("textures.scd", "textures/ui/common/icons/units/ueb0101_icon.dds", "Baumenue-Icons"),
+                            ("units.scd", "units/ueb0101/ueb0101_unit.bp", "Blueprints"),
+                            ("lua.scd", "lua/keymap/defaultKeyMap.lua", "Tastenbelegung")):
+        data = files.read(arc, path) if files.available() else None
+        print(f"{ok if data else warn}{arc}: {what} " + ("lesbar" if data else "NICHT lesbar"))
+    icon = files.unit_icon("ueb0101")
+    print(f"{ok if icon is not None else warn}Icon-Dekodierung (DDS): " + (f"{icon.shape[1]}x{icon.shape[0]}" if icon is not None else "fehlgeschlagen"))
+    km = files.keymap()
+    if km:
+        print(f"{ok}Spiel-Tasten: attack={km.get('attack')} patrol={km.get('patrol')} select_commander={km.get('select_commander')} goto_commander={km.get('goto_commander')}")
+    else:
+        print(f"{warn}Keine Tastenbelegung gelesen (Angriff dann per Alt+Rechtsklick, ACU per Klick)")
+    if not win.IS_WINDOWS:
+        print(f"{warn}Kein Windows: Spielfenster/Eingaben nicht pruefbar")
+        return 0
+    from .game import Game
+
+    win.set_dpi_aware()
+    game = Game(settings, files)
+    if not game.attach():
+        print(f"{warn}Spielfenster nicht gefunden (Titel enthaelt '{settings.get('window_title')}'?). Spiel starten, dann doctor erneut.")
+        return 0
+    w, h = game.client_size
+    print(f"{ok}Spielfenster: {win.window_title(game.hwnd)}  Client {w}x{h}")
+    print("       Waehle jetzt im Spiel den ACU an (Baumenue sichtbar) und zoome ganz heraus ... 4 s")
+    time.sleep(4)
+    frame = game.screenshot()
+    eco = game.ui.read_economy(frame)
+    print(f"{ok if eco.mass is not None else warn}Wirtschaftsleisten: Masse {eco.mass_bar} Energie {eco.energy_bar}")
+    scale = game.ui.detect_scale(frame)
+    print(f"{ok if scale else warn}UI-Skalierung: {scale}")
+    from . import uef
+
+    panel = game.ui.read_panel(frame, uef.T1_ENGINEER_BUILDS) if scale else None
+    if panel and panel.items:
+        print(f"{ok}Baumenue erkannt: " + ", ".join(f"{uef.display_name(k)}@{v}" for k, v in panel.items.items()))
+    else:
+        print(f"{warn}Baumenue nicht erkannt (ist der ACU ausgewaehlt?)")
+    idle = game.ui.idle_engineer(frame) if scale else None
+    print(f"{ok if idle else warn}Idle-Ingenieur-Button: {idle or 'nicht sichtbar (normal, wenn kein Ingenieur untaetig ist)'}")
+    from . import vision
+
+    rect = vision.detect_map_rect(frame, game.ui.exclude_rects(w, h))
+    print(f"{ok if rect else warn}Kartenrechteck: {rect}")
+    if rect and maps:
+        from .capture import crop
+
+        best, score = match_map(crop(frame, rect), maps)
+        print(f"{ok if best else warn}Karte erkannt: {best.name if best else '-'} ({score:.2f})")
+    out = config.DEBUG_DIR / "doctor.png"
+    _annotate(frame, panel, eco, rect, idle, game.ui, out)
+    print(f"       Kontrollbild: {out}")
+    adv = _advisor(settings)
+    print(f"{ok if adv.check() else warn}Ollama: " + (f"Modell {adv.model}" if adv.available else adv.last_error))
+    return 0
+
+
+def _annotate(frame, panel, eco, rect, idle, ui, out: Path) -> None:
+    try:
+        from PIL import Image, ImageDraw
+
+        im = Image.fromarray(frame)
+        d = ImageDraw.Draw(im)
+        if panel:
+            for bp, (x, y) in panel.items.items():
+                r = panel.slot // 2
+                d.rectangle([x - r, y - r, x + r, y + r], outline=(0, 255, 0), width=2)
+                d.text((x - r, y - r - 12), bp, fill=(255, 255, 0))
+            for tier in (1, 2, 3):
+                pos = ui.tab_position(tier)
+                if pos:
+                    d.ellipse([pos[0] - 6, pos[1] - 6, pos[0] + 6, pos[1] + 6], outline=(255, 0, 255), width=2)
+        for bar, col in ((eco.mass_bar, (0, 255, 0)), (eco.energy_bar, (255, 160, 0))):
+            if bar:
+                x, length, y = bar
+                d.rectangle([x, y - 3, x + length, y + 3], outline=col, width=1)
+        if rect:
+            d.rectangle([rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]], outline=(255, 0, 0), width=2)
+        if idle:
+            d.ellipse([idle[0] - 10, idle[1] - 10, idle[0] + 10, idle[1] + 10], outline=(255, 255, 0), width=2)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        im.save(str(out))
+    except Exception as exc:
+        print("Kontrollbild fehlgeschlagen:", exc)
+
+
 def cmd_run(settings: dict, args) -> int:
     from .bot import Bot
     from .game import Game
     from .overlay import Overlay
-    from .profile import Profile
-    from .capture import crop
     from . import vision
 
     log = logmod.get()
     win.set_dpi_aware()
     if args.dry_run:
-        settings["dry_run"] = True
-    maps = list_maps(_game_dir(settings))
+        settings.setdefault("advanced", {})["dry_run"] = True
+    gd = _game_dir(settings)
+    maps = list_maps(gd)
     if not maps:
-        print("Keine Karten gefunden. Setze game_dir in", config.SETTINGS_FILE)
+        print("Keine Karten gefunden. Steam-Installation nicht erkannt? Setze game_dir in", config.SETTINGS_FILE)
         return 1
-
-    game = Game(settings, Profile(settings["faction"], (1, 1)))
+    files = GameFiles(gd)
+    if files.unit_icon("ueb0101") is None:
+        log.warning("Baumenue-Icons aus %s nicht lesbar - der Bot kann das Baumenue nicht erkennen. `doctor` ausfuehren.", gd / "gamedata" / "textures.scd")
+    game = Game(settings, files)
     print("Warte auf das Spielfenster (Spiel starten, Skirmish laden) ... Strg+C bricht ab.")
     while not game.attach():
-        if settings.get("dry_run"):
+        if config.adv(settings, "dry_run"):
             break
         time.sleep(1.5)
-    res = game.client_size if game.hwnd else (1920, 1080)
-    if settings.get("faction") == "auto":
-        avail = Profile.available(res)
-        if not avail:
-            print(f"faction=auto, aber kein kalibriertes Profil fuer {res[0]}x{res[1]}. Zuerst: python -m supcombot calibrate --faction <fraktion>")
-            return 1
-        game.profile = avail[0][1]
-        print("Fraktion wird zu Spielbeginn erkannt. Verfuegbare Profile:", ", ".join(f for f, _p in avail))
-    else:
-        game.profile = Profile.load(settings["faction"], res)
-    missing = game.profile.missing_required()
-    if missing and not args.force:
-        print(f"Profil {game.profile.faction} {res[0]}x{res[1]} ist nicht kalibriert. Fehlend: {', '.join(missing)}")
-        print("Bitte zuerst: python -m supcombot calibrate")
-        return 1
 
-    # Map selection: explicit, otherwise auto-detect from the full zoom-out view.
     chosen = None
-    if args.map or settings.get("map", "auto") != "auto":
+    if args.map or settings.get("map"):
         chosen = find_map(maps, args.map or settings["map"])
         if not chosen:
             print("Karte nicht gefunden:", args.map or settings["map"])
             return 1
-    else:
-        if game.hwnd:
-            print("Karte wird erkannt: bitte im Spiel ganz herauszoomen ... (5 s)")
-            time.sleep(5)
-            img = game.screenshot()
-            rect = vision.detect_map_rect(img, game.profile.exclude_rects())
-            if rect:
-                chosen, score = match_map(crop(img, rect), maps)
-                print(f"Erkannt: {chosen.name if chosen else '-'} ({score:.2f})")
-                if chosen and score < 0.35:
-                    print("Unsichere Erkennung. Starte mit --map <name>, wenn das falsch ist.")
-        if not chosen:
-            chosen = maps[0]
-            print("Karte konnte nicht erkannt werden, nutze", chosen.name, "- besser: --map <name>")
-    if int(settings.get("start_slot", 1)) not in chosen.starts:
-        settings["start_slot"] = sorted(chosen.starts)[0] if chosen.starts else 1
+    elif game.hwnd:
+        print("Karte wird erkannt: bitte im Spiel ganz herauszoomen ... (5 s)")
+        time.sleep(5)
+        img = game.screenshot()
+        w, h = game.client_size
+        rect = vision.detect_map_rect(img, game.ui.exclude_rects(w, h))
+        if rect:
+            from .capture import crop
 
-    advisor = None
-    if settings.get("use_ollama"):
-        advisor = _advisor(settings)
-        if not advisor.check():
-            log.warning("Ollama deaktiviert: %s", advisor.last_error)
-        elif not any(tag in advisor.model for tag in ("14b", "13b", "32b", "70b")):
-            log.info("Tipp fuer RTX 3080: `ollama pull qwen2.5:14b` liefert deutlich bessere Ratschlaege (passt in 10 GB VRAM).")
+            chosen, score = match_map(crop(img, rect), maps)
+            print(f"Erkannt: {chosen.name if chosen else '-'} ({score:.2f})")
+            if chosen and score < 0.35:
+                print("Unsichere Erkennung. Starte mit --map <name>, wenn das falsch ist.")
+    if not chosen:
+        chosen = maps[0]
+        print("Karte konnte nicht erkannt werden, nutze", chosen.name, "- besser: start.bat --map <name>")
 
+    advisor = _make_advisor(settings, log)
     bot = Bot(settings, game, chosen, advisor)
     bot.start()
 
@@ -293,51 +282,38 @@ def cmd_run(settings: dict, args) -> int:
         overlay.run()
     finally:
         bot.stop()
+        settings["bot_enabled"] = False
         config.save_settings(settings)
     return 0
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="supcombot", description="SupComBot - externer Bot fuer Supreme Commander: Forged Alliance (Steam)")
+    parser = argparse.ArgumentParser(prog="supcombot", description="SupComBot - externer UEF-Bot fuer Supreme Commander: Forged Alliance (Steam)")
     parser.add_argument("--debug", action="store_true", help="ausfuehrliches Log + Debug-Screenshots")
     sub = parser.add_subparsers(dest="cmd")
     p_run = sub.add_parser("run", help="Bot + Overlay starten (Standard)")
     p_run.add_argument("--map", help="Kartenname/-ordner statt Auto-Erkennung")
     p_run.add_argument("--dry-run", action="store_true", help="keine Eingaben senden, nur planen/loggen")
-    p_run.add_argument("--force", action="store_true", help="auch mit unvollstaendigem Profil starten")
-    p_cal = sub.add_parser("calibrate", help="UI-Positionen kalibrieren")
-    p_cal.add_argument("--faction", choices=config.FACTIONS)
-    p_cal.add_argument("--only", nargs="*", help="nur diese Schluessel neu kalibrieren")
-    p_cal.add_argument("--map-rect", action="store_true", help="nur das Kartenrechteck")
-    p_cal.add_argument("--template", choices=["victory", "defeat"], help="Sieg-/Niederlage-Dialog als Vorlage aufnehmen")
-    p_cal.add_argument("--copy-from", choices=config.FACTIONS, help="Profil einer anderen Fraktion uebernehmen und nur Button-Bilder neu aufnehmen")
+    sub.add_parser("doctor", help="Erstdiagnose: Module, Spieldateien, Fenster, UI-Erkennung")
     sub.add_parser("maps", help="gefundene Karten auflisten")
-    sub.add_parser("detect-map", help="aktuelle Karte per Screenshot erkennen")
-    sub.add_parser("ollama-test", help="Ollama-Verbindung testen")
-    sub.add_parser("test-input", help="Mausbewegung per SendInput testen")
     sub.add_parser("screenshot", help="Screenshot des Spielfensters speichern")
+    sub.add_parser("test-input", help="Mausbewegung per SendInput testen")
     p_lay = sub.add_parser("layouts", help="gespeicherte Layouts anzeigen")
     p_lay.add_argument("--clear", action="store_true")
-    sub.add_parser("doctor", help="Erstdiagnose: Module, Spiel, Karten, Profil, Ollama")
     p_rep = sub.add_parser("reports", help="Spielberichte anzeigen")
     p_rep.add_argument("--last", action="store_true", help="Nachbesprechung des letzten Spiels ausgeben")
     args = parser.parse_args(argv)
 
-    settings = config.apply_performance_profile(config.load_settings())
+    settings = config.load_settings()
+    settings["bot_enabled"] = False
     if args.debug:
-        settings["debug"] = True
-    logmod.setup(settings.get("debug", False))
-    from . import vision
-
-    vision.set_threads(config.cpu_threads(settings))
+        settings.setdefault("advanced", {})["debug"] = True
+    logmod.setup(bool(config.adv(settings, "debug")))
     cmd = args.cmd or "run"
     if cmd == "run" and not hasattr(args, "map"):
         args = parser.parse_args(["run"] + (["--debug"] if args.debug else []))
-    handlers = {
-        "run": cmd_run, "calibrate": cmd_calibrate, "maps": cmd_maps, "detect-map": cmd_detect_map,
-        "ollama-test": cmd_ollama, "test-input": cmd_test_input, "screenshot": cmd_screenshot, "layouts": cmd_layouts,
-        "doctor": cmd_doctor, "reports": cmd_reports,
-    }
+    handlers = {"run": cmd_run, "doctor": cmd_doctor, "maps": cmd_maps, "screenshot": cmd_screenshot,
+                "test-input": cmd_test_input, "layouts": cmd_layouts, "reports": cmd_reports}
     try:
         return handlers[cmd](settings, args)
     except KeyboardInterrupt:

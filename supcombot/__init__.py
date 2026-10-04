@@ -1,5 +1,5 @@
-"""SupComBot - external bot for Supreme Commander: Forged Alliance (Steam, no mods).
+"""SupComBot - external UEF bot for Supreme Commander: Forged Alliance (Steam, no mods).
 
-Controls the game purely through screenshots, mouse and keyboard input.
+Controls the unmodified game purely through screenshots, mouse and keyboard input.
 """
-__version__ = "0.1.0"
+__version__ = "2.0.0"
