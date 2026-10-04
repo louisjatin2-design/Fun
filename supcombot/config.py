@@ -25,7 +25,10 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 
 STRATEGIES = ["auto", "balanced", "eco", "rush", "turtle"]
 
+SETTINGS_VERSION = 2
+
 DEFAULT_SETTINGS: dict = {
+    "settings_version": SETTINGS_VERSION,
     "game_dir": "",                     # empty = Steam install is found automatically
     "window_title": "Forged Alliance",  # part of the game window title
     "strategy": "balanced",             # auto | balanced | eco | rush | turtle
@@ -78,10 +81,23 @@ def load_settings() -> dict:
     settings = copy.deepcopy(DEFAULT_SETTINGS)
     if SETTINGS_FILE.exists():
         try:
-            _merge(settings, json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _merge(settings, migrate(data))
         except (OSError, json.JSONDecodeError):
             pass
     return settings
+
+
+def migrate(data: dict) -> dict:
+    """Settings from version 1 (calibration era) only keep what still means the same thing."""
+    if int(data.get("settings_version", 1) or 1) >= SETTINGS_VERSION:
+        return data
+    keep = {k: data[k] for k in ("game_dir", "window_title") if data.get(k)}
+    if isinstance(data.get("overlay"), dict):
+        keep["overlay"] = {k: v for k, v in data["overlay"].items() if k in ("x", "y", "alpha")}
+    keep["settings_version"] = SETTINGS_VERSION
+    return keep
 
 
 def save_settings(settings: dict) -> None:
